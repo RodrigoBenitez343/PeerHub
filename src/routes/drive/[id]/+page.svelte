@@ -5,7 +5,7 @@
 	import LivePeerCount from '$lib/components/LivePeerCount.svelte';
 	import { invalidateAll } from '$app/navigation';
 
-	type Entry = { name: string; isFolder: boolean; cached?: boolean };
+	type Entry = { name: string; isFolder: boolean; cached?: boolean; size: number | null };
 
 	let { data }: { data: PageData } = $props();
 

@@ -1,8 +1,12 @@
 <script lang="ts">
 	import FileItem from './FileItem.svelte';
+	import { detectKind } from '$lib';
 	import logo from '$lib/assets/images/ghost.png';
 
-	type Entry = { name: string; isFolder: boolean; cached?: boolean };
+	type Entry = { name: string; isFolder: boolean; cached?: boolean; size: number | null };
+	type GroupBy = 'none' | 'type' | 'cached';
+	type SortBy = 'name' | 'size';
+	type Group = { key: string; label: string; items: Entry[] };
 
 	let {
 		driveId,
@@ -18,12 +22,103 @@
 		isGuest?: boolean;
 	} = $props();
 
+	let query = $state('');
+	let groupBy = $state<GroupBy>('none');
+	let sortBy = $state<SortBy>('name');
+
+	// Reset query when directory changes
+	$effect(() => {
+		dirPath;
+		query = '';
+	});
+
 	function joinPath(name: string) {
 		return dirPath === '/' ? '/' + name : `${dirPath}/${name}`;
 	}
+
+	function entryKind(e: Entry): string {
+		if (e.isFolder) return 'folder';
+		return detectKind(e.name.split('.').pop()?.toLowerCase() ?? '');
+	}
+
+	function compareEntries(a: Entry, b: Entry): number {
+		if (a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1;
+		if (sortBy === 'size') {
+			const diff = (b.size ?? -1) - (a.size ?? -1);
+			if (diff !== 0) return diff;
+		}
+		return a.name.localeCompare(b.name);
+	}
+
+	const TYPE_ORDER: Record<string, number> = {
+		folder: 0,
+		image: 1,
+		video: 2,
+		audio: 3,
+		code: 4,
+		doc: 5,
+		pdf: 6,
+		spreadsheet: 7,
+		archive: 8,
+		data: 9,
+		generic: 10
+	};
+
+	const TYPE_LABEL: Record<string, string> = {
+		folder: 'Folders',
+		image: 'Images',
+		video: 'Video',
+		audio: 'Audio',
+		code: 'Code',
+		doc: 'Documents',
+		pdf: 'PDF',
+		spreadsheet: 'Spreadsheets',
+		archive: 'Archives',
+		data: 'Data Files',
+		generic: 'Other'
+	};
+
+	const filtered = $derived(
+		query.trim()
+			? entries.filter((e) => e.name.toLowerCase().includes(query.trim().toLowerCase()))
+			: entries
+	);
+
+	const flatSorted = $derived([...filtered].sort(compareEntries));
+
+	const groups = $derived.by((): Group[] => {
+		if (groupBy === 'none') return [];
+		const sorted = [...filtered].sort(compareEntries);
+
+		if (groupBy === 'type') {
+			const map = new Map<string, Entry[]>();
+			for (const e of sorted) {
+				const k = entryKind(e);
+				if (!map.has(k)) map.set(k, []);
+				map.get(k)!.push(e);
+			}
+			return [...map.entries()]
+				.sort(([a], [b]) => (TYPE_ORDER[a] ?? 99) - (TYPE_ORDER[b] ?? 99))
+				.map(([key, items]) => ({ key, label: TYPE_LABEL[key] ?? key, items }));
+		}
+
+		if (groupBy === 'cached') {
+			const result: Group[] = [];
+			const c = sorted.filter((e) => e.cached);
+			const u = sorted.filter((e) => !e.cached);
+			if (c.length) result.push({ key: 'cached', label: 'Cached', items: c });
+			if (u.length) result.push({ key: 'uncached', label: 'Not Cached', items: u });
+			return result;
+		}
+
+		return [];
+	});
+
+	const GRID = 'grid gap-3 p-4' as const;
+	const GRID_COLS = 'grid-template-columns: repeat(auto-fill, minmax(110px, 1fr))' as const;
 </script>
 
-{#if entries.length === 0}
+{#if entries.length === 0 && !query}
 	<div class="flex h-full items-center justify-center">
 		{#if peers === 0 && isGuest}
 			<div class="flex flex-col items-center gap-3 text-center">
@@ -58,18 +153,130 @@
 		{/if}
 	</div>
 {:else}
-	<div class="grid gap-3 p-4" style="grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));">
-		{#each entries as e (e.name)}
-			<FileItem
-				name={e.name}
-				isFolder={e.isFolder}
-				cached={e.cached}
-				{peers}
-				{isGuest}
-				href={e.isFolder
-					? `/drive/${driveId}?path=${encodeURIComponent(joinPath(e.name))}`
-					: `/drive/${driveId}/preview?file=${encodeURIComponent(joinPath(e.name))}`}
+	<!-- Toolbar -->
+	<div
+		class="border-border bg-bg-primary sticky top-0 z-10 flex items-center gap-2 border-b px-3 py-2"
+	>
+		<!-- Search -->
+		<div class="relative min-w-0 flex-1">
+			<svg
+				class="text-text-muted pointer-events-none absolute top-1/2 left-2.5 h-3 w-3 -translate-y-1/2"
+				viewBox="0 0 16 16"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="1.5"
+			>
+				<circle cx="6.5" cy="6.5" r="4" />
+				<path d="M10.5 10.5l3 3" stroke-linecap="round" />
+			</svg>
+			<input
+				type="text"
+				bind:value={query}
+				placeholder="Filter…"
+				class="border-border bg-bg-tertiary text-text-primary placeholder:text-text-muted focus:border-accent-dim w-full rounded border py-1.5 pr-6 pl-7 font-mono text-[11px] outline-none"
 			/>
-		{/each}
+			{#if query}
+				<button
+					onclick={() => (query = '')}
+					class="text-text-muted hover:text-text-primary absolute top-1/2 right-2 -translate-y-1/2 transition"
+					aria-label="Clear filter"
+				>
+					<svg
+						viewBox="0 0 16 16"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="1.5"
+						class="h-3 w-3"
+					>
+						<path d="M3 3l10 10M13 3L3 13" />
+					</svg>
+				</button>
+			{/if}
+		</div>
+
+		<!-- Sort toggle -->
+		<div class="border-border flex shrink-0 overflow-hidden rounded border">
+			<button
+				onclick={() => (sortBy = 'name')}
+				class="px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition {sortBy ===
+				'name'
+					? 'bg-accent-dim/20 text-accent'
+					: 'text-text-muted hover:text-text-secondary'}"
+			>
+				A-Z
+			</button>
+			<button
+				onclick={() => (sortBy = 'size')}
+				class="border-border border-l px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition {sortBy ===
+				'size'
+					? 'bg-accent-dim/20 text-accent'
+					: 'text-text-muted hover:text-text-secondary'}"
+			>
+				Size
+			</button>
+		</div>
+
+		<!-- Group by -->
+		<select
+			bind:value={groupBy}
+			class="border-border bg-bg-tertiary text-text-secondary focus:border-accent-dim shrink-0 cursor-pointer rounded border px-2 py-1.5 font-mono text-[9px] tracking-wider uppercase outline-none"
+		>
+			<option value="none">No Group</option>
+			<option value="type">By Type</option>
+			<option value="cached">By Cache</option>
+		</select>
 	</div>
+
+	<!-- Content -->
+	{#if filtered.length === 0}
+		<div class="flex flex-col items-center gap-2 py-16 text-center">
+			<p class="text-text-muted font-mono text-xs tracking-wider uppercase">No matches</p>
+			<button
+				onclick={() => (query = '')}
+				class="text-accent hover:text-accent/80 font-mono text-[10px] tracking-wider uppercase transition"
+			>
+				Clear filter
+			</button>
+		</div>
+	{:else if groupBy === 'none'}
+		<div class={GRID} style={GRID_COLS}>
+			{#each flatSorted as e (e.name)}
+				<FileItem
+					name={e.name}
+					isFolder={e.isFolder}
+					cached={e.cached}
+					size={e.size}
+					{peers}
+					{isGuest}
+					href={e.isFolder
+						? `/drive/${driveId}?path=${encodeURIComponent(joinPath(e.name))}`
+						: `/drive/${driveId}/preview?file=${encodeURIComponent(joinPath(e.name))}`}
+				/>
+			{/each}
+		</div>
+	{:else}
+		{#each groups as group (group.key)}
+			<div class="px-4 pt-4 pb-1">
+				<p class="text-text-muted font-mono text-[9px] tracking-[3px] uppercase">
+					{group.label}
+					<span class="ml-1 opacity-50">{group.items.length}</span>
+				</p>
+			</div>
+			<div class={GRID} style={GRID_COLS}>
+				{#each group.items as e (e.name)}
+					<FileItem
+						name={e.name}
+						isFolder={e.isFolder}
+						cached={e.cached}
+						size={e.size}
+						{peers}
+						{isGuest}
+						href={e.isFolder
+							? `/drive/${driveId}?path=${encodeURIComponent(joinPath(e.name))}`
+							: `/drive/${driveId}/preview?file=${encodeURIComponent(joinPath(e.name))}`}
+					/>
+				{/each}
+			</div>
+		{/each}
+	{/if}
 {/if}

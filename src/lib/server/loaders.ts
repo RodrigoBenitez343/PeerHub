@@ -24,6 +24,7 @@ export interface DriveEntry {
 	name: string;
 	isFolder: boolean;
 	cached: boolean;
+	size: number | null;
 }
 
 export interface PeerInfo {
@@ -74,9 +75,14 @@ export async function loadEntries(app: App, id: string, dirPath: string): Promis
 
 			const fullPath = dirPath === '/' ? '/' + name : `${dirPath}/${name}`;
 			let isFolder = false;
+			let size: number | null = null;
 			try {
 				const entry = await session.drive!.entry(fullPath);
 				isFolder = !entry || !(entry as any).value;
+				if (!isFolder) {
+					const blob = (entry as any)?.value?.blob;
+					if (blob?.byteLength != null) size = blob.byteLength;
+				}
 			} catch {
 				isFolder = true;
 			}
@@ -86,7 +92,7 @@ export async function loadEntries(app: App, id: string, dirPath: string): Promis
 				cached = !!(await session.cache!.entry(fullPath));
 			} catch {}
 
-			result.push({ name, isFolder, cached });
+			result.push({ name, isFolder, cached, size });
 		}
 	} catch (err) {
 		console.warn('readdir failed:', err);

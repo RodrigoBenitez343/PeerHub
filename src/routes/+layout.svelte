@@ -30,11 +30,7 @@
 		class:-translate-x-full={!sidebarOpen}
 		class:translate-x-0={sidebarOpen}
 	>
-		{#await data.sessions}
-			<Sidebar sessions={[]} onClose={() => (sidebarOpen = false)} />
-		{:then sessions}
-			<Sidebar {sessions} onClose={() => (sidebarOpen = false)} />
-		{/await}
+		<Sidebar sessions={data.sessions} onClose={() => (sidebarOpen = false)} />
 	</div>
 
 	<!-- Backdrop on mobile -->
@@ -73,11 +69,7 @@
 				<span
 					class="text-text-secondary min-w-0 flex-1 truncate font-mono text-[10px] tracking-[3px] uppercase"
 				>
-					{#await data.sessions then sessions}
-						{sessions.find((s: any) => s.id === page.params?.id)?.name ?? 'Ghost Drive'}
-					{:catch}
-						Ghost Drive
-					{/await}
+					{data.sessions.find((s: any) => s.id === page.params?.id)?.name ?? 'Ghost Drive'}
 				</span>
 			</div>
 		</div>

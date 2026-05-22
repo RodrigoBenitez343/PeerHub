@@ -8,6 +8,7 @@
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	const action = $derived(page.url.searchParams.get('action'));
+	let submitting = $state(false);
 
 	async function autoNavigate(autoOpen: Promise<string | null> | undefined) {
 		if (!autoOpen) return;
@@ -20,6 +21,7 @@
 	});
 
 	function onActionSuccess({ result }: { result: any }) {
+		submitting = false;
 		if (result.type === 'success' && result.data?.redirect) {
 			goto(result.data.redirect);
 		}
@@ -32,9 +34,10 @@
 			method="POST"
 			action="?/create"
 			enctype="multipart/form-data"
-			use:enhance={() =>
-				async ({ result }) =>
-					onActionSuccess({ result })}
+			use:enhance={() => {
+				submitting = true;
+				return async ({ result }) => onActionSuccess({ result });
+			}}
 			class="border-border bg-bg-secondary w-full max-w-sm space-y-4 rounded-lg border p-6"
 		>
 			<h2 class="text-accent font-mono text-xs tracking-[3px] uppercase">New Drive</h2>
@@ -72,9 +75,10 @@
 				</a>
 				<button
 					type="submit"
-					class="bg-accent text-bg-primary rounded px-4 py-2 font-mono text-[10px] tracking-wider uppercase hover:brightness-110"
+					disabled={submitting}
+					class="bg-accent text-bg-primary rounded px-4 py-2 font-mono text-[10px] tracking-wider uppercase hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
 				>
-					Create
+					{submitting ? 'Creating…' : 'Create'}
 				</button>
 			</div>
 		</form>
@@ -82,9 +86,10 @@
 		<form
 			method="POST"
 			action="?/accept"
-			use:enhance={() =>
-				async ({ result }) =>
-					onActionSuccess({ result })}
+			use:enhance={() => {
+				submitting = true;
+				return async ({ result }) => onActionSuccess({ result });
+			}}
 			class="border-border bg-bg-secondary w-full max-w-sm space-y-4 rounded-lg border p-6"
 		>
 			<h2 class="text-accent font-mono text-xs tracking-[3px] uppercase">Accept Invite</h2>
@@ -112,9 +117,10 @@
 				</a>
 				<button
 					type="submit"
-					class="bg-accent text-bg-primary rounded px-4 py-2 font-mono text-[10px] tracking-wider uppercase hover:brightness-110"
+					disabled={submitting}
+					class="bg-accent text-bg-primary rounded px-4 py-2 font-mono text-[10px] tracking-wider uppercase hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
 				>
-					Join
+					{submitting ? 'Joining…' : 'Join'}
 				</button>
 			</div>
 		</form>
