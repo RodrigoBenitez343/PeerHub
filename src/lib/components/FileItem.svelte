@@ -19,10 +19,36 @@
 		href: string;
 	} = $props();
 
-	const ext = $derived(name.split('.').pop()?.toLowerCase() ?? '');
+	// One colour per file kind — vibrant enough to read on dark backgrounds
+	const KIND_COLOR: Record<string, string> = {
+		folder: '#a68c42', // gold (matches accent-dim)
+		image: '#60a5fa', // blue
+		video: '#f87171', // red
+		audio: '#c084fc', // purple
+		code: '#34d399', // emerald
+		doc: '#94a3b8', // slate
+		pdf: '#fb7185', // rose
+		archive: '#fb923c', // orange
+		spreadsheet: '#4ade80', // green
+		data: '#facc15', // yellow
+		generic: '#6b7280' // gray
+	};
+
+	const ext = $derived(name.includes('.') ? (name.split('.').pop()?.toLowerCase() ?? '') : '');
 	const fileKind = $derived(isFolder ? 'folder' : detectKind(ext));
 	const offline = $derived(isGuest && peers === 0 && !isFolder && !cached);
 	const formattedSize = $derived(isFolder ? null : formatFileSize(size));
+	const kindColor = $derived(KIND_COLOR[fileKind] ?? KIND_COLOR.generic);
+
+	// Cached files always glow gold; otherwise use a soft per-type glow
+	const iconStyle = $derived(
+		cached
+			? 'color: #c8a84e; filter: drop-shadow(0 0 8px rgba(200,168,78,0.5))'
+			: `color: ${kindColor}; filter: drop-shadow(0 0 6px ${kindColor}33)`
+	);
+
+	// Badge: show the extension label (≤4 chars) inside the icon area
+	const showBadge = $derived(!isFolder && ext.length > 0 && ext.length <= 4);
 </script>
 
 <a
@@ -31,12 +57,7 @@
 	class:opacity-40={offline}
 	title={offline ? 'Not available offline' : name}
 >
-	<div
-		class="relative flex h-12 w-12 items-center justify-center transition-all duration-150"
-		class:text-accent={cached}
-		class:text-accent-dim={!cached}
-		style={cached ? 'filter: drop-shadow(0 0 8px rgba(200,168,78,0.5))' : ''}
-	>
+	<div class="relative flex h-12 w-12 items-center justify-center" style={iconStyle}>
 		{#if fileKind === 'folder'}
 			<svg
 				viewBox="0 0 16 16"
@@ -203,6 +224,15 @@
 				<path d="M3 2h7l3 3v9H3z" />
 				<path d="M10 2v3h3" />
 			</svg>
+		{/if}
+
+		{#if showBadge}
+			<span
+				class="pointer-events-none absolute bottom-0 left-1/2 -translate-x-1/2 rounded font-mono uppercase"
+				style="font-size: 5.5px; padding: 1.5px 3px; letter-spacing: 0.06em; background: var(--color-bg-primary); color: {kindColor}; border: 1px solid {kindColor}55;"
+			>
+				{ext.toUpperCase()}
+			</span>
 		{/if}
 	</div>
 

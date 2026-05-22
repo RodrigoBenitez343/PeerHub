@@ -23,14 +23,24 @@
 	} = $props();
 
 	let query = $state('');
-	let groupBy = $state<GroupBy>('none');
+	let groupBy = $state<GroupBy>('type');
 	let sortBy = $state<SortBy>('name');
+	let dropdownOpen = $state(false);
 
 	// Reset query when directory changes
 	$effect(() => {
 		dirPath;
 		query = '';
 	});
+
+	const GROUP_OPTIONS: { value: GroupBy; label: string }[] = [
+		{ value: 'none', label: 'No Group' },
+		{ value: 'type', label: 'By Type' },
+		{ value: 'cached', label: 'By Cache' }
+	];
+	const currentGroupLabel = $derived(
+		GROUP_OPTIONS.find((o) => o.value === groupBy)?.label ?? 'Group'
+	);
 
 	function joinPath(name: string) {
 		return dirPath === '/' ? '/' + name : `${dirPath}/${name}`;
@@ -153,78 +163,131 @@
 		{/if}
 	</div>
 {:else}
-	<!-- Toolbar -->
-	<div
-		class="border-border bg-bg-primary sticky top-0 z-10 flex items-center gap-2 border-b px-3 py-2"
-	>
-		<!-- Search -->
-		<div class="relative min-w-0 flex-1">
-			<svg
-				class="text-text-muted pointer-events-none absolute top-1/2 left-2.5 h-3 w-3 -translate-y-1/2"
-				viewBox="0 0 16 16"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="1.5"
-			>
-				<circle cx="6.5" cy="6.5" r="4" />
-				<path d="M10.5 10.5l3 3" stroke-linecap="round" />
-			</svg>
-			<input
-				type="text"
-				bind:value={query}
-				placeholder="Filter…"
-				class="border-border bg-bg-tertiary text-text-primary placeholder:text-text-muted focus:border-accent-dim w-full rounded border py-1.5 pr-6 pl-7 font-mono text-[11px] outline-none"
-			/>
-			{#if query}
+	<!-- Toolbar: sort left · search centre · group right -->
+	<div class="border-border bg-bg-primary sticky top-0 z-10 border-b">
+		<div class="flex items-center gap-3 px-3 py-2">
+			<!-- Sort (left) -->
+			<div class="border-border flex shrink-0 overflow-hidden rounded border">
 				<button
-					onclick={() => (query = '')}
-					class="text-text-muted hover:text-text-primary absolute top-1/2 right-2 -translate-y-1/2 transition"
-					aria-label="Clear filter"
+					onclick={() => (sortBy = 'name')}
+					class="px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition {sortBy ===
+					'name'
+						? 'bg-accent-dim/20 text-accent'
+						: 'text-text-muted hover:text-text-secondary'}"
 				>
+					A-Z
+				</button>
+				<button
+					onclick={() => (sortBy = 'size')}
+					class="border-border border-l px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition {sortBy ===
+					'size'
+						? 'bg-accent-dim/20 text-accent'
+						: 'text-text-muted hover:text-text-secondary'}"
+				>
+					Size
+				</button>
+			</div>
+
+			<!-- Search (centre, fills available space) -->
+			<div class="relative min-w-0 flex-1">
+				<svg
+					class="text-text-muted pointer-events-none absolute top-1/2 left-2.5 h-3 w-3 -translate-y-1/2"
+					viewBox="0 0 16 16"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="1.5"
+				>
+					<circle cx="6.5" cy="6.5" r="4" />
+					<path d="M10.5 10.5l3 3" stroke-linecap="round" />
+				</svg>
+				<input
+					type="text"
+					bind:value={query}
+					placeholder="Filter…"
+					class="border-border bg-bg-tertiary text-text-primary placeholder:text-text-muted focus:border-accent-dim w-full rounded border py-1.5 pr-6 pl-7 font-mono text-[11px] outline-none"
+				/>
+				{#if query}
+					<button
+						onclick={() => (query = '')}
+						class="text-text-muted hover:text-text-primary absolute top-1/2 right-2 -translate-y-1/2 transition"
+						aria-label="Clear filter"
+					>
+						<svg
+							viewBox="0 0 16 16"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="1.5"
+							class="h-3 w-3"
+						>
+							<path d="M3 3l10 10M13 3L3 13" />
+						</svg>
+					</button>
+				{/if}
+			</div>
+
+			<!-- Group (right) -->
+			<div class="relative shrink-0">
+				<button
+					onclick={() => (dropdownOpen = !dropdownOpen)}
+					class="border-border bg-bg-tertiary text-text-secondary hover:border-accent-dim flex items-center gap-1.5 rounded border px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition {dropdownOpen
+						? 'border-accent-dim'
+						: ''}"
+				>
+					{currentGroupLabel}
 					<svg
 						viewBox="0 0 16 16"
 						fill="none"
 						stroke="currentColor"
-						stroke-width="1.5"
-						class="h-3 w-3"
+						stroke-width="2"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						class="h-2.5 w-2.5 transition-transform duration-150 {dropdownOpen ? 'rotate-180' : ''}"
 					>
-						<path d="M3 3l10 10M13 3L3 13" />
+						<path d="M4 6l4 4 4-4" />
 					</svg>
 				</button>
-			{/if}
-		</div>
 
-		<!-- Sort toggle -->
-		<div class="border-border flex shrink-0 overflow-hidden rounded border">
-			<button
-				onclick={() => (sortBy = 'name')}
-				class="px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition {sortBy ===
-				'name'
-					? 'bg-accent-dim/20 text-accent'
-					: 'text-text-muted hover:text-text-secondary'}"
-			>
-				A-Z
-			</button>
-			<button
-				onclick={() => (sortBy = 'size')}
-				class="border-border border-l px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition {sortBy ===
-				'size'
-					? 'bg-accent-dim/20 text-accent'
-					: 'text-text-muted hover:text-text-secondary'}"
-			>
-				Size
-			</button>
+				{#if dropdownOpen}
+					<button
+						class="fixed inset-0 z-10"
+						onclick={() => (dropdownOpen = false)}
+						aria-hidden="true"
+						tabindex="-1"
+					></button>
+					<div
+						class="border-border bg-bg-secondary absolute top-full right-0 z-20 mt-1 w-36 overflow-hidden rounded border shadow-lg"
+					>
+						{#each GROUP_OPTIONS as opt}
+							<button
+								onclick={() => {
+									groupBy = opt.value;
+									dropdownOpen = false;
+								}}
+								class="hover:bg-bg-hover flex w-full items-center justify-between px-3 py-2.5 font-mono text-[10px] tracking-wider uppercase transition {groupBy ===
+								opt.value
+									? 'text-accent'
+									: 'text-text-secondary'}"
+							>
+								{opt.label}
+								{#if groupBy === opt.value}
+									<svg
+										viewBox="0 0 16 16"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										class="h-2.5 w-2.5"
+									>
+										<path d="M3 8l4 4 6-7" />
+									</svg>
+								{/if}
+							</button>
+						{/each}
+					</div>
+				{/if}
+			</div>
 		</div>
-
-		<!-- Group by -->
-		<select
-			bind:value={groupBy}
-			class="border-border bg-bg-tertiary text-text-secondary focus:border-accent-dim shrink-0 cursor-pointer rounded border px-2 py-1.5 font-mono text-[9px] tracking-wider uppercase outline-none"
-		>
-			<option value="none">No Group</option>
-			<option value="type">By Type</option>
-			<option value="cached">By Cache</option>
-		</select>
 	</div>
 
 	<!-- Content -->
