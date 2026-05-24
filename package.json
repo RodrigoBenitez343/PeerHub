@@ -43,8 +43,8 @@
 		"format": "prettier --write .",
 		"lint": "prettier --check .",
 		"test": "brittle-bare test/*.cjs",
-		"build:darwin": "bare-build --out out/ghost-drive-darwin-arm64 --host darwin-arm64 --icon ghost.png --name GhostDrive --runtime bare-native/runtime build/index.js",
-		"build:android": "bare-build --out out/android-arm64 --resources resources/android --host android-arm64 --manifest manifest.xml --identifier io.ghostdrive.app --name GhostDrive --runtime bare-native/runtime build/index.js",
+		"make:darwin-arm64": "bare-build --out out/ghost-drive-darwin-arm64 --host darwin-arm64 --icon ghost.png --name GhostDrive --runtime bare-native/runtime build/index.js",
+		"make:android-arm64": "bare-build --out out/ghost-drive-android-arm64 --resources resources/android --host android-arm64 --manifest manifest.xml --identifier io.ghostdrive.app --name GhostDrive --runtime bare-native/runtime build/index.js",
 		"clean": "rm -rf out build .svelte-kit"
 	},
 	"devDependencies": {

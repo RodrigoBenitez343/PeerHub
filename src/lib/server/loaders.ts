@@ -61,47 +61,96 @@ export async function loadDrive(app: App, id: string): Promise<DriveInfo> {
 	};
 }
 
-export async function loadEntries(app: App, id: string, dirPath: string): Promise<DriveEntry[]> {
+const REVALIDATE_AFTER = 15_000;
+
+interface CacheEntry {
+	entries: DriveEntry[];
+	ts: number;
+	pending?: Promise<DriveEntry[]>;
+}
+
+const entriesCache = new Map<string, CacheEntry>();
+
+async function fetchEntries(app: App, id: string, dirPath: string): Promise<DriveEntry[]> {
 	const session = await getSession(app, id);
-	const result: DriveEntry[] = [];
+	const seen = new Set<string>();
+	const pending: Promise<DriveEntry>[] = [];
+
+	async function resolveEntry(name: string): Promise<DriveEntry> {
+		const fullPath = dirPath === '/' ? '/' + name : `${dirPath}/${name}`;
+		let isFolder = false;
+		let size: number | null = null;
+		try {
+			const entry = await session.drive!.entry(fullPath);
+			isFolder = !entry || !(entry as any).value;
+			if (!isFolder) {
+				const blob = (entry as any)?.value?.blob;
+				if (blob?.byteLength != null) size = blob.byteLength;
+			}
+		} catch {
+			isFolder = true;
+		}
+
+		let cached = false;
+		try {
+			cached = !!(await session.cache!.entry(fullPath));
+		} catch {}
+
+		return { name, isFolder, cached, size };
+	}
 
 	try {
-		const seen = new Set<string>();
 		for await (const item of session.drive!.readdir(dirPath)) {
 			const name = typeof item === 'string' ? item : (item as any).key || (item as any).name;
-			if (!name || name.startsWith('.')) continue;
-			if (seen.has(name)) continue;
+			if (!name || name.startsWith('.') || seen.has(name)) continue;
 			seen.add(name);
-
-			const fullPath = dirPath === '/' ? '/' + name : `${dirPath}/${name}`;
-			let isFolder = false;
-			let size: number | null = null;
-			try {
-				const entry = await session.drive!.entry(fullPath);
-				isFolder = !entry || !(entry as any).value;
-				if (!isFolder) {
-					const blob = (entry as any)?.value?.blob;
-					if (blob?.byteLength != null) size = blob.byteLength;
-				}
-			} catch {
-				isFolder = true;
-			}
-
-			let cached = false;
-			try {
-				cached = !!(await session.cache!.entry(fullPath));
-			} catch {}
-
-			result.push({ name, isFolder, cached, size });
+			pending.push(resolveEntry(name));
 		}
 	} catch (err) {
 		console.warn('readdir failed:', err);
 	}
 
-	return result.sort((a, b) => {
+	const entries = await Promise.all(pending);
+	return entries.sort((a, b) => {
 		if (a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1;
 		return a.name.localeCompare(b.name);
 	});
+}
+
+export function loadEntries(
+	app: App,
+	id: string,
+	dirPath: string
+): { entries: Promise<DriveEntry[]>; fresh: Promise<DriveEntry[]> | null } {
+	const cacheKey = `${id}:${dirPath}`;
+	const hit = entriesCache.get(cacheKey);
+
+	if (!hit) {
+		const p = fetchEntries(app, id, dirPath).then((entries) => {
+			entriesCache.set(cacheKey, { entries, ts: Date.now() });
+			return entries;
+		});
+		return { entries: p, fresh: null };
+	}
+
+	if (Date.now() - hit.ts < REVALIDATE_AFTER) {
+		return { entries: Promise.resolve(hit.entries), fresh: null };
+	}
+
+	// Stale — return cached immediately, revalidate in background
+	if (!hit.pending) {
+		hit.pending = fetchEntries(app, id, dirPath)
+			.then((entries) => {
+				entriesCache.set(cacheKey, { entries, ts: Date.now() });
+				return entries;
+			})
+			.finally(() => {
+				const c = entriesCache.get(cacheKey);
+				if (c) delete c.pending;
+			});
+	}
+
+	return { entries: Promise.resolve(hit.entries), fresh: hit.pending };
 }
 
 export async function loadPeers(app: App, id: string): Promise<PeerInfo[]> {

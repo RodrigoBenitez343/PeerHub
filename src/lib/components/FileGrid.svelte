@@ -165,9 +165,9 @@
 {:else}
 	<!-- Toolbar: sort left · search centre · group right -->
 	<div class="border-border bg-bg-primary sticky top-0 z-10 border-b">
-		<div class="flex items-center gap-3 px-3 py-2">
+		<div class="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2 md:flex-nowrap">
 			<!-- Sort (left) -->
-			<div class="border-border flex shrink-0 overflow-hidden rounded border">
+			<div class="border-border order-1 flex shrink-0 overflow-hidden rounded border">
 				<button
 					onclick={() => (sortBy = 'name')}
 					class="px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition {sortBy ===
@@ -188,8 +188,8 @@
 				</button>
 			</div>
 
-			<!-- Search (centre, fills available space) -->
-			<div class="relative min-w-0 flex-1">
+			<!-- Search (full-width row 2 on mobile, flex-1 centre on desktop) -->
+			<div class="relative order-3 w-full min-w-0 md:order-2 md:w-auto md:flex-1">
 				<svg
 					class="text-text-muted pointer-events-none absolute top-1/2 left-2.5 h-3 w-3 -translate-y-1/2"
 					viewBox="0 0 16 16"
@@ -225,8 +225,8 @@
 				{/if}
 			</div>
 
-			<!-- Group (right) -->
-			<div class="relative shrink-0">
+			<!-- Group (right of row 1 on mobile, rightmost on desktop) -->
+			<div class="relative order-2 ml-auto shrink-0 md:order-3 md:ml-0">
 				<button
 					onclick={() => (dropdownOpen = !dropdownOpen)}
 					class="border-border bg-bg-tertiary text-text-secondary hover:border-accent-dim flex items-center gap-1.5 rounded border px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition {dropdownOpen

@@ -197,7 +197,7 @@
 				method="POST"
 				action="?/deleteSession"
 				use:enhance={() => async () => {
-					goto('/');
+					goto('/', { invalidate: ['app:layout'] });
 				}}
 				class="border-danger/40 bg-bg-secondary rounded-md border p-4"
 			>

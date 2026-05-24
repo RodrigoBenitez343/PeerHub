@@ -15,9 +15,16 @@
 	let cachedEntries = $state<Entry[] | null>(null);
 
 	$effect(() => {
+		let cancelled = false;
 		(async () => {
 			cachedEntries = await data.entries;
+			if (data.fresh && !cancelled) {
+				cachedEntries = await data.fresh;
+			}
 		})();
+		return () => {
+			cancelled = true;
+		};
 	});
 
 	function handlePeersChange(n: number) {
@@ -128,7 +135,13 @@
 				</div>
 			{/if}
 		{:then entries}
-			<FileGrid driveId={drive.id} path={data.path} {entries} {peers} isGuest={drive.isGuest} />
+			<FileGrid
+				driveId={drive.id}
+				path={data.path}
+				entries={cachedEntries ?? entries}
+				{peers}
+				isGuest={drive.isGuest}
+			/>
 		{/await}
 	</section>
 {/await}

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { invalidateAll } from '$app/navigation';
 
 	let {
@@ -14,6 +15,10 @@
 	} = $props();
 
 	let peers = $state(initial);
+
+	onMount(() => {
+		onchange?.(initial);
+	});
 
 	$effect(() => {
 		reconnectSignal; // reactive dependency — changing this closes and reopens the SSE
