@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { PageData } from './$types';
 	import { enhance } from '$app/forms';
+	import { page } from '$app/state';
 	import logo from '$lib/assets/images/ghost.png';
 
 	let { data }: { data: PageData } = $props();
@@ -12,10 +13,41 @@
 	}
 
 	const fileUrl = $derived(`/api/files/${data.drive.id}${data.path}`);
-	const dlUrl = $derived(`${fileUrl}?dl=1`);
+	// Absolute URL so the WebView hands the link off to the system browser,
+	// which can actually save the file (?dl=1 sets Content-Disposition: attachment).
+	const dlUrl = $derived(`${page.url.origin}${fileUrl}?dl=1`);
 	const parentPath = $derived(parentDir(data.path));
 	const filename = $derived(data.path.split('/').pop() || data.path);
+
+	// Native download (Android): the server streams the file into a location the
+	// user picks via the system file dialog. Elsewhere we fall back to the link.
+	let downloading = $state(false);
+	let notice = $state('');
+
+	function onDownload() {
+		downloading = true;
+		notice = '';
+		return async ({ result }: { result: any }) => {
+			downloading = false;
+			// The download runs in the background; the downloads tray shows progress.
+			notice = result.type === 'success' ? 'Downloading…' : (result.data?.error ?? 'Failed');
+			globalThis.setTimeout(() => (notice = ''), 3000);
+		};
+	}
 </script>
+
+{#snippet downloadControl(label: string, klass: string)}
+	{#if data.canPickDownload}
+		<form method="POST" action="?/download" use:enhance={onDownload} class="contents">
+			<input type="hidden" name="file" value={data.path} />
+			<button type="submit" class={klass} disabled={downloading}>
+				{downloading ? 'Saving…' : label}
+			</button>
+		</form>
+	{:else}
+		<a href={dlUrl} target="_blank" rel="noopener" class={klass}>{label}</a>
+	{/if}
+{/snippet}
 
 <header class="border-border bg-bg-secondary flex h-11 items-center gap-3 border-b px-4">
 	<a
@@ -53,13 +85,13 @@
 			</button>
 		</form>
 	{/if}
-	<a
-		href={dlUrl}
-		download={filename}
-		class="bg-accent/10 text-accent hover:bg-accent/20 rounded px-2 py-1 font-mono text-[10px] tracking-wider uppercase transition"
-	>
-		Download
-	</a>
+	{#if notice}
+		<span class="text-text-muted font-mono text-[10px] tracking-wider uppercase">{notice}</span>
+	{/if}
+	{@render downloadControl(
+		'Download',
+		'bg-accent/10 text-accent hover:bg-accent/20 rounded px-2 py-1 font-mono text-[10px] tracking-wider uppercase transition disabled:opacity-50'
+	)}
 </header>
 
 <section class="flex flex-1 items-center justify-center overflow-hidden p-4">
@@ -90,13 +122,10 @@
 	{:else if data.kind === 'text' && data.isBinary}
 		<div class="flex flex-col items-center gap-2 text-center">
 			<p class="text-text-muted font-mono text-xs tracking-wider uppercase">Binary file</p>
-			<a
-				href={dlUrl}
-				download={filename}
-				class="text-accent font-mono text-[10px] tracking-wider uppercase underline underline-offset-2"
-			>
-				Download to open
-			</a>
+			{@render downloadControl(
+				'Download to open',
+				'text-accent font-mono text-[10px] tracking-wider uppercase underline underline-offset-2 disabled:opacity-50'
+			)}
 		</div>
 	{:else if data.kind === 'text' && data.textPreview != null}
 		<pre
@@ -106,13 +135,10 @@
 			<p class="text-text-muted font-mono text-xs tracking-wider uppercase">
 				No preview for .{filename.split('.').pop()}
 			</p>
-			<a
-				href={dlUrl}
-				download={filename}
-				class="text-accent font-mono text-[10px] tracking-wider uppercase underline underline-offset-2"
-			>
-				Download to open
-			</a>
+			{@render downloadControl(
+				'Download to open',
+				'text-accent font-mono text-[10px] tracking-wider uppercase underline underline-offset-2 disabled:opacity-50'
+			)}
 		</div>
 	{/if}
 </section>

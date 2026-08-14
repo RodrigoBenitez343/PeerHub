@@ -64,6 +64,7 @@
 		"require-asset": "^1.2.1",
 		"svelte": "^5.55.2",
 		"svelte-check": "^4.4.6",
+		"sveltekit-adapter-bare": "^0.2.0",
 		"tailwindcss": "^4.2.2",
 		"typescript": "^6.0.2",
 		"vite": "^8.0.7"
@@ -75,6 +76,7 @@
 		"bare-crypto": "^1.13.4",
 		"bare-encoding": "^1.0.3",
 		"bare-fetch": "^2.8.2",
+		"bare-file-picker-android": "file:../bare-file-picker-android",
 		"bare-fs": "^4.6.0",
 		"bare-http1": "^4.5.5",
 		"bare-module": "^6.2.0",
@@ -90,6 +92,7 @@
 		"compact-encoding": "^2.19.2",
 		"corestore": "^7.9.2",
 		"distributed-drive": "file:../distributed-drive",
+		"ghost-picker": "file:./packages/picker",
 		"esbuild": "^0.28.0",
 		"hyperbee2": "^1.0.0",
 		"hyperdb": "^6.6.1",
@@ -106,7 +109,6 @@
 		"safety-catch": "^1.0.3",
 		"sodium-native": "^5.1.0",
 		"streamx": "^2.25.0",
-		"sveltekit-adapter-bare": "file:../sveltekit-adapter-bare",
 		"which-runtime": "^1.3.2"
 	}
 }

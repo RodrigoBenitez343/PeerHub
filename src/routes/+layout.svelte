@@ -1,6 +1,7 @@
 <script lang="ts">
 	import './layout.css';
 	import Sidebar from '$lib/components/Sidebar.svelte';
+	import DownloadsTray from '$lib/components/DownloadsTray.svelte';
 	import type { LayoutData } from './$types';
 	import { page } from '$app/state';
 	import logo from '$lib/assets/images/ghost.png';
@@ -76,4 +77,6 @@
 
 		{@render children()}
 	</main>
+
+	<DownloadsTray />
 </div>

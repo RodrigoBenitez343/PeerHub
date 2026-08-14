@@ -7,6 +7,9 @@ export default defineConfig({
 	plugins: [tailwindcss(), sveltekit(), bareExternals()],
 	ssr: {
 		external: [
+			// Platform-conditional file picker: kept external so its android/default
+			// export condition is resolved by bare-build per host, not inlined here.
+			'ghost-picker',
 			'distributed-drive',
 			'hyperbee2',
 			'protomux',

@@ -1,0 +1,14 @@
+{
+	"name": "ghost-picker",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Platform-conditional file picker for Ghost Drive (Android SAF, noop elsewhere)",
+	"exports": {
+		"android": "./android.js",
+		"default": "./default.js"
+	},
+	"dependencies": {
+		"bare-file-picker-android": "file:../../../bare-file-picker-android"
+	}
+}

@@ -131,3 +131,13 @@ declare module 'bare-storage' {
 	const storage: { persistent(): string; ephemeral(): string };
 	export default storage;
 }
+
+declare module 'ghost-picker' {
+	export function pickerAvailable(): boolean;
+	export function downloadToDocument(
+		session: unknown,
+		filePath: string,
+		onProgress?: (written: number, total: number) => void
+	): Promise<{ saved: boolean; cancelled?: boolean }>;
+	export function pickDirectory(): Promise<{ uri: string; path: string | null } | null>;
+}

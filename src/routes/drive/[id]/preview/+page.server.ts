@@ -1,5 +1,7 @@
 import type { Actions, PageServerLoad } from './$types';
 import { error, fail } from '@sveltejs/kit';
+import { pickerAvailable } from 'ghost-picker';
+import { downloads } from '$lib/server/downloads';
 
 export const load: PageServerLoad = async ({ locals, params, url }) => {
 	if (!locals.app?.opened) await locals.app?.ready?.();
@@ -33,7 +35,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 				isBinary: false,
 				isEmpty: false,
 				cached: false,
-				unavailable: true
+				unavailable: true,
+				canPickDownload: pickerAvailable()
 			};
 		}
 		// Extra diagnostic: try each drive individually
@@ -115,7 +118,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		isBinary,
 		isEmpty,
 		cached,
-		unavailable: false
+		unavailable: false,
+		canPickDownload: pickerAvailable()
 	};
 };
 
@@ -125,7 +129,7 @@ export const actions: Actions = {
 		if (!session) throw error(404, 'Drive not found');
 
 		const form = await request.formData();
-		const filePath = (form.get('file') ?? '').toString().replaceAll('+', ' ');
+		const filePath = (form.get('file') ?? '').toString();
 		if (!filePath) return fail(400, { error: 'Missing file' });
 
 		try {
@@ -134,6 +138,21 @@ export const actions: Actions = {
 			return fail(500, { error: err.message });
 		}
 		return {};
+	},
+
+	download: async ({ locals, params, request }) => {
+		if (!pickerAvailable()) return fail(400, { error: 'Download not supported on this platform' });
+
+		const session = locals.app.getSession(params.id);
+		if (!session) throw error(404, 'Drive not found');
+
+		const form = await request.formData();
+		const filePath = (form.get('file') ?? '').toString();
+		if (!filePath) return fail(400, { error: 'Missing file' });
+
+		// Runs in the background; progress is reported over /downloads/stream.
+		downloads.start(session, filePath);
+		return { started: true };
 	}
 };
 

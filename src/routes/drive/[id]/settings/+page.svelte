@@ -9,6 +9,15 @@
 	let copied = $state(false);
 	let confirmDelete = $state(false);
 	let deleteForm: HTMLFormElement | undefined = $state();
+	let picking = $state(false);
+
+	function onPickFolder() {
+		picking = true;
+		return async ({ update }: { update: () => Promise<void> }) => {
+			picking = false;
+			await update();
+		};
+	}
 
 	function copy() {
 		navigator.clipboard.writeText(data.inviteUrl).then(() => {
@@ -111,20 +120,33 @@
 				{/each}
 			</ul>
 
-			<form method="POST" action="?/addDrive" use:enhance class="mt-2 flex gap-2">
-				<input
-					name="target"
-					type="text"
-					placeholder="Local path or 64-char hyperdrive key"
-					class="border-border bg-bg-tertiary text-text-primary focus:border-accent-dim flex-1 rounded border px-3 py-2 font-mono text-xs outline-none"
-				/>
-				<button
-					type="submit"
-					class="bg-accent text-bg-primary rounded px-4 py-2 font-mono text-[10px] tracking-wider uppercase hover:brightness-110"
-				>
-					Add
-				</button>
-			</form>
+			<div class="mt-2 flex gap-2">
+				<form method="POST" action="?/addDrive" use:enhance class="flex flex-1 gap-2">
+					<input
+						name="target"
+						type="text"
+						placeholder="Local path or 64-char hyperdrive key"
+						class="border-border bg-bg-tertiary text-text-primary focus:border-accent-dim flex-1 rounded border px-3 py-2 font-mono text-xs outline-none"
+					/>
+					<button
+						type="submit"
+						class="bg-accent text-bg-primary rounded px-4 py-2 font-mono text-[10px] tracking-wider uppercase hover:brightness-110"
+					>
+						Add
+					</button>
+				</form>
+				{#if data.canPickDirectory}
+					<form method="POST" action="?/pickFolder" use:enhance={onPickFolder}>
+						<button
+							type="submit"
+							disabled={picking}
+							class="border-border text-text-secondary hover:border-accent-dim hover:text-accent rounded border px-4 py-2 font-mono text-[10px] tracking-wider uppercase transition disabled:opacity-50"
+						>
+							{picking ? 'Picking…' : 'Pick folder'}
+						</button>
+					</form>
+				{/if}
+			</div>
 			{#if form?.error}
 				<p class="text-danger mt-1 font-mono text-[10px]">{form.error}</p>
 			{/if}

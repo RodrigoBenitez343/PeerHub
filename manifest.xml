@@ -10,5 +10,6 @@
         <category android:name="android.intent.category.LAUNCHER" />
       </intent-filter>
     </activity>
+    <activity android:name="to.holepunch.bare.filepicker.FilePickerActivity" android:exported="false" android:theme="@android:style/Theme.Translucent.NoTitleBar" />
   </application>
 </manifest>
