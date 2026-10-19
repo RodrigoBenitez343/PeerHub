@@ -35,6 +35,7 @@ declare module 'corestore' {
 		createKeyPair(name: string): Promise<{ publicKey: Buffer; secretKey: Buffer }>;
 		replicate(conn: unknown): unknown;
 		session(): Corestore;
+		get(opts: { name: string }): any;
 	}
 }
 
@@ -65,13 +66,18 @@ declare module 'hyperdb' {
 
 declare module 'localdrive' {
 	export default class Localdrive {
-		constructor(path: string);
+		constructor(path: string, opts?: { atomic?: boolean; followLinks?: boolean });
+		readonly root: string;
 		ready(): Promise<void>;
 		close(): Promise<void>;
 		get(path: string, opts?: object): Promise<any>;
+		put(path: string, buffer: Buffer | Uint8Array, opts?: object): Promise<void>;
+		del(path: string): Promise<void>;
 		list(prefix?: string, opts?: object): AsyncIterable<any>;
 		readdir(prefix: string): AsyncIterable<string>;
-		entry(path: string): Promise<any>;
+		entry(path: string, opts?: object): Promise<any>;
+		createReadStream(path: string, opts?: object): AsyncIterable<Buffer>;
+		createWriteStream(path: string, opts?: object): any;
 		batch(): { del(key: string): Promise<void>; flush(): Promise<void> };
 		mirror(dest: unknown, opts?: object): { done(): Promise<void> };
 	}
@@ -110,8 +116,45 @@ declare module 'distributed-drive' {
 		register(drive: unknown): void;
 		unregister(drive: unknown): void;
 		mirror(dest: unknown, opts?: object): { done(): Promise<void> };
+		readonly server: any;
 		on(event: 'connected' | 'disconnected', listener: () => void): this;
 		on(event: string, listener: (...args: unknown[]) => void): this;
+		protected _open(): Promise<void>;
+		protected _close(): Promise<void>;
+	}
+}
+
+declare module 'protomux-rpc' {
+	export default class ProtomuxRPC {
+		constructor(stream: unknown, opts?: { protocol?: string; id?: unknown });
+		readonly opened: boolean;
+		readonly closed: boolean;
+		readonly stream: any;
+		request(
+			method: string,
+			value: unknown,
+			opts?: { requestEncoding?: any; responseEncoding?: any; timeout?: number }
+		): Promise<any>;
+		respond(
+			method: string,
+			opts: { requestEncoding?: any; responseEncoding?: any },
+			handler: (req: any) => any
+		): void;
+		destroy(err?: Error): void;
+		once(event: string, listener: (...args: any[]) => void): this;
+		on(event: string, listener: (...args: any[]) => void): this;
+	}
+}
+
+declare module 'compact-encoding' {
+	const c: any;
+	export default c;
+}
+
+declare module 'protomux' {
+	export default class Protomux {
+		static from(stream: unknown, opts?: object): any;
+		static isProtomux(mux: unknown): boolean;
 	}
 }
 
@@ -125,6 +168,7 @@ declare module 'b4a' {
 	export function from(data: string | Buffer | Uint8Array, encoding?: string): Buffer;
 	export function toString(buf: Buffer | Uint8Array, encoding?: string): string;
 	export function equals(a: Buffer | Uint8Array, b: Buffer | Uint8Array): boolean;
+	export function concat(buffers: Array<Buffer | Uint8Array>, length?: number): Buffer;
 }
 
 declare module 'bare-storage' {

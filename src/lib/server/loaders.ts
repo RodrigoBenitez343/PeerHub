@@ -153,6 +153,14 @@ export function loadEntries(
 	return { entries: Promise.resolve(hit.entries), fresh: hit.pending };
 }
 
+// Drop cached directory listings after a write so the next render shows the
+// change immediately instead of waiting for the revalidation window.
+export function invalidateEntries(id: string): void {
+	for (const key of entriesCache.keys()) {
+		if (key.startsWith(`${id}:`)) entriesCache.delete(key);
+	}
+}
+
 export async function loadPeers(app: App, id: string): Promise<PeerInfo[]> {
 	const session = await getSession(app, id);
 	const result: PeerInfo[] = [];

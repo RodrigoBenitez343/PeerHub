@@ -1,6 +1,8 @@
 <script lang="ts">
 	import FileItem from './FileItem.svelte';
+	import Modal from './Modal.svelte';
 	import { detectKind } from '$lib';
+	import { invalidateAll } from '$app/navigation';
 	import logo from '$lib/assets/images/ghost.png';
 
 	type Entry = { name: string; isFolder: boolean; cached?: boolean; size: number | null };
@@ -13,19 +15,83 @@
 		path: dirPath,
 		entries,
 		peers = 0,
-		isGuest = false
+		isGuest = false,
+		canWrite = false
 	}: {
 		driveId: string;
 		path: string;
 		entries: Entry[];
 		peers?: number;
 		isGuest?: boolean;
+		canWrite?: boolean;
 	} = $props();
 
 	let query = $state('');
 	let groupBy = $state<GroupBy>('type');
 	let sortBy = $state<SortBy>('name');
 	let dropdownOpen = $state(false);
+
+	let fileInput: HTMLInputElement | undefined = $state();
+	let folderInput: HTMLInputElement | undefined = $state();
+	let uploading = $state<{ done: number; total: number; name: string } | null>(null);
+	let notice = $state<string | null>(null);
+	let pendingDelete = $state<Entry | null>(null);
+	let confirmDelete = $state(false);
+
+	// Encode per segment: a full encodeURIComponent would turn the separators into
+	// %2F and hand the route one giant segment.
+	function apiPath(relative: string) {
+		const full = dirPath === '/' ? `/${relative}` : `${dirPath}/${relative}`;
+		const encoded = full.split('/').map(encodeURIComponent).join('/');
+		return `/api/files/${driveId}${encoded}`;
+	}
+
+	async function uploadFiles(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const files = [...(input.files ?? [])];
+		input.value = '';
+		if (files.length === 0) return;
+
+		notice = null;
+		uploading = { done: 0, total: files.length, name: files[0].name };
+
+		for (const file of files) {
+			uploading = { ...uploading, name: file.name };
+			// Picked folders carry their path relative to the chosen root.
+			const relative = (file as any).webkitRelativePath || file.name;
+			try {
+				const res = await fetch(apiPath(relative), { method: 'PUT', body: file });
+				if (!res.ok) throw new Error((await res.text()) || res.statusText);
+			} catch (err: any) {
+				notice = `Could not upload ${relative}: ${err.message}`;
+				setTimeout(() => (notice = null), 6000);
+				break;
+			}
+			uploading = { ...uploading, done: uploading.done + 1 };
+		}
+
+		uploading = null;
+		await invalidateAll();
+	}
+
+	async function removeEntry() {
+		const entry = pendingDelete;
+		if (!entry) return;
+
+		notice = null;
+		try {
+			const res = await fetch(apiPath(entry.name), { method: 'DELETE' });
+			if (!res.ok) throw new Error((await res.text()) || res.statusText);
+		} catch (err: any) {
+			pendingDelete = null;
+			notice = `Could not delete ${entry.name}: ${err.message}`;
+			setTimeout(() => (notice = null), 6000);
+			return;
+		}
+
+		pendingDelete = null;
+		await invalidateAll();
+	}
 
 	// Reset query when directory changes
 	$effect(() => {
@@ -128,6 +194,20 @@
 	const GRID_COLS = 'grid-template-columns: repeat(auto-fill, minmax(110px, 1fr))' as const;
 </script>
 
+<Modal
+	bind:open={confirmDelete}
+	title="Delete file"
+	message={pendingDelete
+		? `Remove "${pendingDelete.name}" from the shared drive for every peer?`
+		: ''}
+	confirmLabel="Delete"
+	danger
+	onConfirm={removeEntry}
+/>
+
+<input bind:this={fileInput} type="file" multiple class="hidden" onchange={uploadFiles} />
+<input bind:this={folderInput} type="file" webkitdirectory class="hidden" onchange={uploadFiles} />
+
 {#if entries.length === 0 && !query}
 	<div class="flex h-full items-center justify-center">
 		{#if peers === 0 && isGuest}
@@ -151,15 +231,49 @@
 					<path d="M6 8h4M8 6v4" stroke-width="1.2" />
 				</svg>
 				<p class="text-text-muted font-mono text-xs tracking-wider uppercase">No content</p>
-				<a
-					href="/drive/{driveId}/settings"
-					class="border-border text-text-secondary hover:border-accent-dim hover:text-accent rounded border px-3 py-1.5 font-mono text-[10px] tracking-wider uppercase transition"
-				>
-					Add a Drive in Settings
-				</a>
+				<div class="flex gap-2">
+					{#if canWrite}
+						<button
+							onclick={() => fileInput?.click()}
+							class="bg-accent text-bg-primary rounded px-3 py-1.5 font-mono text-[10px] tracking-wider uppercase transition hover:brightness-110"
+						>
+							Upload files
+						</button>
+						<button
+							onclick={() => folderInput?.click()}
+							class="border-border text-text-secondary hover:border-accent-dim hover:text-accent rounded border px-3 py-1.5 font-mono text-[10px] tracking-wider uppercase transition"
+						>
+							Upload folder
+						</button>
+					{/if}
+					<a
+						href="/drive/{driveId}/settings"
+						class="border-border text-text-secondary hover:border-accent-dim hover:text-accent rounded border px-3 py-1.5 font-mono text-[10px] tracking-wider uppercase transition"
+					>
+						Add a Drive in Settings
+					</a>
+				</div>
 			</div>
 		{:else}
-			<p class="text-text-muted font-mono text-xs tracking-wider uppercase">Empty</p>
+			<div class="flex flex-col items-center gap-3 text-center">
+				<p class="text-text-muted font-mono text-xs tracking-wider uppercase">Empty</p>
+				{#if canWrite}
+					<div class="flex gap-2">
+						<button
+							onclick={() => fileInput?.click()}
+							class="bg-accent text-bg-primary rounded px-3 py-1.5 font-mono text-[10px] tracking-wider uppercase transition hover:brightness-110"
+						>
+							Upload files
+						</button>
+						<button
+							onclick={() => folderInput?.click()}
+							class="border-border text-text-secondary hover:border-accent-dim hover:text-accent rounded border px-3 py-1.5 font-mono text-[10px] tracking-wider uppercase transition"
+						>
+							Upload folder
+						</button>
+					</div>
+				{/if}
+			</div>
 		{/if}
 	</div>
 {:else}
@@ -187,6 +301,24 @@
 					Size
 				</button>
 			</div>
+
+			{#if canWrite}
+				<button
+					onclick={() => fileInput?.click()}
+					disabled={!!uploading}
+					class="border-border text-text-secondary hover:border-accent-dim hover:text-accent order-1 shrink-0 rounded border px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition disabled:opacity-50"
+				>
+					{uploading ? 'Uploading' : 'Upload'}
+				</button>
+				<button
+					onclick={() => folderInput?.click()}
+					disabled={!!uploading}
+					class="border-border text-text-secondary hover:border-accent-dim hover:text-accent order-1 shrink-0 rounded border px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition disabled:opacity-50"
+					title="Upload a folder with all of its files"
+				>
+					Folder
+				</button>
+			{/if}
 
 			<!-- Search (full-width row 2 on mobile, flex-1 centre on desktop) -->
 			<div class="relative order-3 w-full min-w-0 md:order-2 md:w-auto md:flex-1">
@@ -288,6 +420,18 @@
 				{/if}
 			</div>
 		</div>
+
+		{#if uploading || notice}
+			<div class="border-border flex items-center gap-2 border-t px-3 py-1.5">
+				{#if uploading}
+					<span class="text-accent font-mono text-[10px] tracking-wider uppercase">
+						{uploading.done}/{uploading.total} · {uploading.name}
+					</span>
+				{:else if notice}
+					<span class="text-danger font-mono text-[10px]">{notice}</span>
+				{/if}
+			</div>
+		{/if}
 	</div>
 
 	<!-- Content -->
@@ -311,6 +455,7 @@
 					size={e.size}
 					{peers}
 					{isGuest}
+					onDelete={canWrite ? () => ((pendingDelete = e), (confirmDelete = true)) : null}
 					href={e.isFolder
 						? `/drive/${driveId}?path=${encodeURIComponent(joinPath(e.name))}`
 						: `/drive/${driveId}/preview?file=${encodeURIComponent(joinPath(e.name))}`}
@@ -334,6 +479,7 @@
 						size={e.size}
 						{peers}
 						{isGuest}
+						onDelete={canWrite ? () => ((pendingDelete = e), (confirmDelete = true)) : null}
 						href={e.isFolder
 							? `/drive/${driveId}?path=${encodeURIComponent(joinPath(e.name))}`
 							: `/drive/${driveId}/preview?file=${encodeURIComponent(joinPath(e.name))}`}

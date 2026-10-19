@@ -1,10 +1,12 @@
 import ReadyResource from 'ready-resource';
 import Localdrive from 'localdrive';
 import Hyperdrive from 'hyperdrive';
-import DistributedDrive from 'distributed-drive';
 import path from 'path';
 import b4a from 'b4a';
 import fs from 'fs';
+import SharedDrive from './shared-drive.js';
+import SessionSync, { type SyncPairView, type SyncSummary } from './sync.js';
+import { invalidateEntries } from './loaders.js';
 import type GhostDriveApp from './app.js';
 
 type Buf = Buffer | Uint8Array;
@@ -19,7 +21,7 @@ interface DriveSessionOptions {
 
 export interface DriveListEntry {
 	target: string;
-	type: 'cache' | 'hyperdrive' | 'local';
+	type: 'cache' | 'shared' | 'hyperdrive' | 'local';
 }
 
 export default class DriveSession extends ReadyResource {
@@ -28,8 +30,11 @@ export default class DriveSession extends ReadyResource {
 	name: string;
 	icon: Buf;
 	private _remoteKey: Buf | null;
-	drive: DistributedDrive | null;
+	drive: SharedDrive | null;
 	cache: Localdrive | null;
+	shared: Localdrive | null;
+	sharedPath: string;
+	sync: SessionSync | null;
 	private driveMap: Map<string, Localdrive | Hyperdrive>;
 
 	constructor({ app, id, name, icon, key }: DriveSessionOptions) {
@@ -41,6 +46,9 @@ export default class DriveSession extends ReadyResource {
 		this._remoteKey = key ?? null;
 		this.drive = null;
 		this.cache = null;
+		this.shared = null;
+		this.sharedPath = '';
+		this.sync = null;
 		this.driveMap = new Map();
 	}
 
@@ -53,11 +61,17 @@ export default class DriveSession extends ReadyResource {
 	}
 
 	protected async _open(): Promise<void> {
-		const cacheDir = path.join(this.app.dir, 'sessions', this.id, 'cache');
-		this.cache = new Localdrive(cacheDir);
+		const sessionDir = path.join(this.app.dir, 'sessions', this.id);
+
+		this.cache = new Localdrive(path.join(sessionDir, 'cache'));
 		await this.cache.ready();
 
-		const initialDrives: (Localdrive | Hyperdrive)[] = [this.cache];
+		// Everyone writes new files here; the host owns the folder on disk.
+		this.sharedPath = path.join(sessionDir, 'shared');
+		this.shared = new Localdrive(this.sharedPath, { atomic: true });
+		await this.shared.ready();
+
+		const initialDrives: (Localdrive | Hyperdrive)[] = [];
 
 		const regs = (await this.app
 			.db!.find('@ghostdrive/registrations-by-session', {
@@ -87,8 +101,20 @@ export default class DriveSession extends ReadyResource {
 			}
 		}
 
-		const driveOpts: { drives: (Localdrive | Hyperdrive)[]; key?: Buf; name?: string } = {
-			drives: initialDrives
+		// The offline cache is mounted last: a cached copy must never shadow the
+		// live shared file system while the host is reachable.
+		initialDrives.push(this.shared, this.cache);
+
+		const driveOpts: {
+			drives: (Localdrive | Hyperdrive)[];
+			key?: Buf;
+			name?: string;
+			cache: Localdrive;
+			shared: Localdrive;
+		} = {
+			drives: initialDrives,
+			cache: this.cache,
+			shared: this.shared
 		};
 
 		if (this._remoteKey) {
@@ -97,12 +123,13 @@ export default class DriveSession extends ReadyResource {
 			driveOpts.name = 'ghost-drive/' + this.id;
 		}
 
-		this.drive = new DistributedDrive(this.app.store!.session(), driveOpts as any);
+		this.drive = new SharedDrive(this.app.store!.session(), driveOpts as any);
 		await this.drive!.ready();
 
 		this.drive!.on('connected', () => {
 			console.log(`[session ${this.id}] connected`);
 			this.emit('peer-connected');
+			this.sync?.triggerAuto();
 		});
 
 		this.drive!.on('disconnected', () => {
@@ -110,12 +137,21 @@ export default class DriveSession extends ReadyResource {
 			this.emit('peer-disconnected');
 		});
 
+		// A peer changed a file: drop cached listings so the next render is fresh.
+		this.drive!.on('changed', () => invalidateEntries(this.id));
+
+		this.sync = new SessionSync(this);
+		await this.sync.ready();
+
 		console.log(
 			`[session ${this.id}] opened — drives: ${this.drive!.drives.length}, key: ${b4a.toString(this.drive!.key, 'hex').slice(0, 12)}...`
 		);
 	}
 
 	protected async _close(): Promise<void> {
+		if (this.sync) await this.sync.close();
+		this.sync = null;
+
 		for (const drive of this.driveMap.values()) {
 			try {
 				await drive.close();
@@ -123,6 +159,7 @@ export default class DriveSession extends ReadyResource {
 		}
 		this.driveMap.clear();
 		if (this.cache) await this.cache.close();
+		if (this.shared) await this.shared.close();
 		if (this.drive) await this.drive.close();
 	}
 
@@ -157,6 +194,7 @@ export default class DriveSession extends ReadyResource {
 		const local = new Localdrive(drivePath);
 		this.driveMap.set(drivePath, local);
 		this.drive!.register(local as any);
+		this.drive!.keepCacheLast();
 	}
 
 	async addHyperdrive(hex: string): Promise<void> {
@@ -170,6 +208,7 @@ export default class DriveSession extends ReadyResource {
 		await hd.ready();
 		this.driveMap.set(hex, hd);
 		this.drive!.register(hd as any);
+		this.drive!.keepCacheLast();
 
 		await this.app.db!.insert('@ghostdrive/registrations', {
 			sessionId: this.id,
@@ -181,6 +220,8 @@ export default class DriveSession extends ReadyResource {
 	}
 
 	async removeDrive(target: string): Promise<void> {
+		if (target === this.sharedPath) throw new Error('The shared folder cannot be removed');
+
 		const drive = this.driveMap.get(target);
 		if (!drive) return;
 
@@ -193,12 +234,66 @@ export default class DriveSession extends ReadyResource {
 	}
 
 	listDrives(): DriveListEntry[] {
-		const list: DriveListEntry[] = [{ target: 'cache', type: 'cache' }];
+		const list: DriveListEntry[] = [
+			{ target: 'cache', type: 'cache' },
+			{ target: this.sharedPath, type: 'shared' }
+		];
 		for (const target of this.driveMap.keys()) {
 			const type = /^[0-9a-f]{64}$/i.test(target) ? 'hyperdrive' : 'local';
 			list.push({ target, type });
 		}
 		return list;
+	}
+
+	// --- Writing to the shared file system ---
+
+	get canWrite(): boolean {
+		return !!this.drive?.canWrite;
+	}
+
+	async putFile(filePath: string, source: AsyncIterable<Buf>): Promise<void> {
+		const drive = this.writableDrive();
+		await drive.putShared(filePath, source);
+	}
+
+	async deleteFile(filePath: string): Promise<void> {
+		const drive = this.writableDrive();
+		await drive.deleteShared(filePath);
+	}
+
+	private writableDrive(): SharedDrive {
+		if (!this.drive) throw new Error('Drive not ready');
+		if (!this.drive.canWrite) {
+			throw new Error('Not connected to the host — reconnect before changing shared files');
+		}
+		return this.drive;
+	}
+
+	// --- Local sync ---
+
+	listSyncPairs(): SyncPairView[] {
+		return this.sync?.list() ?? [];
+	}
+
+	async addSyncPair(localPath: string): Promise<SyncPairView> {
+		return this.requireSync().add(localPath);
+	}
+
+	async removeSyncPair(id: string): Promise<void> {
+		await this.requireSync().remove(id);
+	}
+
+	async setSyncAuto(id: string, auto: boolean): Promise<void> {
+		await this.requireSync().setAuto(id, auto);
+	}
+
+	async runSync(id: string): Promise<SyncSummary> {
+		return this.requireSync().run(id);
+	}
+
+	private requireSync(): SessionSync {
+		if (!this.sync) throw new Error('Sync is not ready yet');
+		return this.sync;
 	}
 
 	// --- Invites ---

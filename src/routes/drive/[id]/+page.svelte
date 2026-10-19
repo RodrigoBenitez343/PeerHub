@@ -114,6 +114,7 @@
 					entries={cachedEntries}
 					{peers}
 					isGuest={drive.isGuest}
+					canWrite={!drive.isGuest || peers > 0}
 				/>
 			{:else}
 				<div
@@ -141,6 +142,7 @@
 				entries={cachedEntries ?? entries}
 				{peers}
 				isGuest={drive.isGuest}
+				canWrite={!drive.isGuest || peers > 0}
 			/>
 		{/await}
 	</section>

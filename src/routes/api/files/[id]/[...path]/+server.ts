@@ -1,5 +1,6 @@
 import type { RequestHandler } from './$types';
-import { error } from '@sveltejs/kit';
+import { error, json } from '@sveltejs/kit';
+import { invalidateEntries } from '$lib/server/loaders';
 
 const CHUNK_SIZE = 1024 * 1024; // 1MB
 
@@ -29,6 +30,44 @@ const MIME: Record<string, string> = {
 function mimeFor(filePath: string) {
 	const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
 	return MIME[ext] || 'application/octet-stream';
+}
+
+function filePathOf(params: { path?: string }): string {
+	return '/' + (params.path ?? '').replaceAll('+', ' ');
+}
+
+// Uploads arrive as a request body; hand the drive a stream so large files are
+// never buffered in memory. Runtimes that hide the stream can still fall back
+// to the buffered body.
+async function* readBody(request: Request): AsyncGenerator<Buffer> {
+	const body: any = (request as any).body;
+
+	if (body && typeof body.getReader === 'function') {
+		const reader = body.getReader();
+		try {
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				if (value?.byteLength) {
+					yield Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+				}
+			}
+		} finally {
+			reader.releaseLock?.();
+		}
+		return;
+	}
+
+	if (body && typeof body[Symbol.asyncIterator] === 'function') {
+		for await (const chunk of body) {
+			const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+			if (buf.byteLength) yield buf;
+		}
+		return;
+	}
+
+	const buffered = Buffer.from(await request.arrayBuffer());
+	if (buffered.byteLength) yield buffered;
 }
 
 export const GET: RequestHandler = async ({ locals, params, request, url }) => {
@@ -111,4 +150,41 @@ export const GET: RequestHandler = async ({ locals, params, request, url }) => {
 	});
 
 	return new Response(stream, { status: partial ? 206 : 200, headers });
+};
+
+// Write a file into the shared file system (create or overwrite). Applies to
+// whichever peer holds the session: guests forward the bytes to the host.
+export const PUT: RequestHandler = async ({ locals, params, request }) => {
+	if (!locals.app?.opened) await locals.app?.ready?.();
+
+	const session = locals.app.getSession(params.id);
+	if (!session) throw error(404, 'Drive not found');
+	if (!session.canWrite) throw error(409, 'Not connected to the host');
+
+	try {
+		await session.putFile(filePathOf(params), readBody(request));
+	} catch (err: any) {
+		throw error(500, err?.message ?? 'Upload failed');
+	}
+
+	invalidateEntries(params.id);
+	return json({ ok: true });
+};
+
+// Remove a file from the shared file system.
+export const DELETE: RequestHandler = async ({ locals, params }) => {
+	if (!locals.app?.opened) await locals.app?.ready?.();
+
+	const session = locals.app.getSession(params.id);
+	if (!session) throw error(404, 'Drive not found');
+	if (!session.canWrite) throw error(409, 'Not connected to the host');
+
+	try {
+		await session.deleteFile(filePathOf(params));
+	} catch (err: any) {
+		throw error(500, err?.message ?? 'Delete failed');
+	}
+
+	invalidateEntries(params.id);
+	return json({ ok: true });
 };
