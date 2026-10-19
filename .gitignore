@@ -6,3 +6,5 @@ fixtures
 memory
 .svelte-kit
 build
+.app-instance.lock
+.app-instance.pid
