@@ -8,6 +8,11 @@ set -eu
 
 cd "$(dirname "$0")"
 
+if ! command -v npm >/dev/null 2>&1; then
+	echo "[ghost-drive] npm not found - install Node.js first." >&2
+	exit 1
+fi
+
 if command -v flock >/dev/null 2>&1; then
 	exec 9>.app-instance.lock
 	if ! flock -n 9; then
@@ -27,7 +32,10 @@ fi
 
 if [ ! -d node_modules ]; then
 	echo "[ghost-drive] node_modules missing, installing dependencies ..."
-	npm install
+	if ! npm install; then
+		echo "[ghost-drive] npm install failed - see the error above." >&2
+		exit 1
+	fi
 fi
 
 if [ "$#" -eq 0 ]; then
