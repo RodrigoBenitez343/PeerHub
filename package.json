@@ -76,7 +76,6 @@
 		"bare-crypto": "^1.13.4",
 		"bare-encoding": "^1.0.3",
 		"bare-fetch": "^2.8.2",
-		"bare-file-picker-android": "file:../bare-file-picker-android",
 		"bare-fs": "^4.6.0",
 		"bare-http1": "^4.5.5",
 		"bare-module": "^6.2.0",
