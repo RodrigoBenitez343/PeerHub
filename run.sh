@@ -11,6 +11,14 @@ fi
 
 set -eu
 
+# Self-heal a copy whose line endings were converted to CRLF (Notepad save,
+# zip/copy to another PC): a trailing \r breaks every line, so the script
+# dies before any guard inside it can run. Rewrite once, then re-exec.
+if od -c "$0" 2>/dev/null | grep -c '\\r' | grep -qv '^0$'; then
+	sed 's/\r$//' "$0" >"$0.tmp" && mv "$0.tmp" "$0" && chmod +x "$0"
+	exec "$0" "$@"
+fi
+
 LOCK=
 
 # A double-clicked terminal closes the moment this script exits, taking every
@@ -31,13 +39,24 @@ trap cleanup EXIT
 cd "$(dirname "$0")"
 
 # Desktop launchers do not read ~/.bashrc, so an nvm install is not on PATH.
-if ! command -v npm >/dev/null 2>&1; then
-	for dir in "${NVM_DIR:-$HOME/.nvm}/versions/node"/*/bin; do
-		if [ -x "$dir/npm" ]; then
-			PATH="$dir:$PATH"
-		fi
-	done
+# Under 'set -eu' an unmatched glob aborts the script (dash keeps the literal,
+# but sourcing nvm.sh is the reliable route), so try nvm.sh first.
+if ! command -v npm >/dev/null 2>&1 && [ -s "${NVM_DIR:-$HOME/.nvm}/nvm.sh" ]; then
+	NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+	set +eu # nvm.sh references unset vars and failing tests; keep -eu out of it
+	\. "$NVM_DIR/nvm.sh" >/dev/null 2>&1 || true
+	set -eu
 	export PATH
+fi
+if ! command -v npm >/dev/null 2>&1; then
+	if [ -d "${NVM_DIR:-$HOME/.nvm}/versions/node" ]; then
+		for dir in "${NVM_DIR:-$HOME/.nvm}/versions/node"/*/bin; do
+			if [ -x "$dir/npm" ]; then
+				PATH="$dir:$PATH"
+			fi
+		done
+		export PATH
+	fi
 fi
 
 if ! command -v npm >/dev/null 2>&1; then
@@ -65,9 +84,18 @@ fi
 
 if [ ! -d node_modules ]; then
 	echo "[ghost-drive] node_modules missing, installing dependencies ..."
+	# A fresh PC has no lockfile (package-lock.json is gitignored) and may also
+	# carry a stale file: dependency symlink, so the first install can fail
+	# where running it again by hand works. Retry the same way.
 	if ! npm install; then
-		echo "[ghost-drive] npm install failed - see the error above." >&2
-		exit 1
+		echo "[ghost-drive] npm install failed, retrying once ..." >&2
+		rm -rf node_modules
+		if ! npm install; then
+			echo "[ghost-drive] npm install failed twice - see the error above." >&2
+			echo "  If it mentions sodium-native or rabin-native, install build tools" >&2
+			echo "  (python3, make, g++) and run this script again." >&2
+			exit 1
+		fi
 	fi
 fi
 
