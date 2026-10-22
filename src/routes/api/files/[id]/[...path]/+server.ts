@@ -1,6 +1,7 @@
 import type { RequestHandler } from './$types';
 import { error, json } from '@sveltejs/kit';
 import { invalidateEntries } from '$lib/server/loaders';
+import { invalidateIgnore, loadIgnoreMatcher } from '$lib/server/ignores';
 
 const CHUNK_SIZE = 1024 * 1024; // 1MB
 
@@ -154,6 +155,8 @@ export const GET: RequestHandler = async ({ locals, params, request, url }) => {
 
 // Write a file into the shared file system (create or overwrite). Applies to
 // whichever peer holds the session: guests forward the bytes to the host.
+// Paths matched by the repo's .gitignore are accepted but not stored: the client
+// already skips them, and this guard covers direct API calls and folder syncs.
 export const PUT: RequestHandler = async ({ locals, params, request }) => {
 	if (!locals.app?.opened) await locals.app?.ready?.();
 
@@ -161,13 +164,24 @@ export const PUT: RequestHandler = async ({ locals, params, request }) => {
 	if (!session) throw error(404, 'Drive not found');
 	if (!session.canWrite) throw error(409, 'Not connected to the host');
 
+	const filePath = filePathOf(params);
+
+	if (!filePath.endsWith('/.gitignore')) {
+		const ignore = await loadIgnoreMatcher(session);
+		if (ignore.ignored(filePath)) {
+			return json({ ok: true, skipped: 'gitignore', path: filePath });
+		}
+	}
+
 	try {
-		await session.putFile(filePathOf(params), readBody(request));
+		await session.putFile(filePath, readBody(request));
 	} catch (err: any) {
 		throw error(500, err?.message ?? 'Upload failed');
 	}
 
 	invalidateEntries(params.id);
+	// A fresh .gitignore changes the rules for everything that follows.
+	if (filePath.endsWith('/.gitignore')) invalidateIgnore(params.id);
 	return json({ ok: true });
 };
 
@@ -179,12 +193,14 @@ export const DELETE: RequestHandler = async ({ locals, params }) => {
 	if (!session) throw error(404, 'Drive not found');
 	if (!session.canWrite) throw error(409, 'Not connected to the host');
 
+	const filePath = filePathOf(params);
 	try {
-		await session.deleteFile(filePathOf(params));
+		await session.deleteFile(filePath);
 	} catch (err: any) {
 		throw error(500, err?.message ?? 'Delete failed');
 	}
 
 	invalidateEntries(params.id);
+	if (filePath.endsWith('/.gitignore')) invalidateIgnore(params.id);
 	return json({ ok: true });
 };

@@ -2,8 +2,9 @@
 	import FileItem from './FileItem.svelte';
 	import Modal from './Modal.svelte';
 	import { detectKind } from '$lib';
+	import { compileIgnore, planUpload, type IgnoreSource } from '$lib/ignore';
 	import { invalidateAll } from '$app/navigation';
-	import logo from '$lib/assets/images/ghost.png';
+	import logo from '$lib/assets/images/ghost-mark.png';
 
 	type Entry = { name: string; isFolder: boolean; cached?: boolean; size: number | null };
 	type GroupBy = 'none' | 'type' | 'cached';
@@ -16,7 +17,8 @@
 		entries,
 		peers = 0,
 		isGuest = false,
-		canWrite = false
+		canWrite = false,
+		ignore = []
 	}: {
 		driveId: string;
 		path: string;
@@ -24,7 +26,12 @@
 		peers?: number;
 		isGuest?: boolean;
 		canWrite?: boolean;
+		ignore?: IgnoreSource[];
 	} = $props();
+
+	// Same parser as the upload guard in the API route, so what the browser skips
+	// is exactly what the server would have refused.
+	const ignoreRules = $derived(compileIgnore(ignore));
 
 	let query = $state('');
 	let groupBy = $state<GroupBy>('type');
@@ -48,20 +55,35 @@
 
 	async function uploadFiles(event: Event) {
 		const input = event.currentTarget as HTMLInputElement;
-		const files = [...(input.files ?? [])];
+		const picked = [...(input.files ?? [])];
 		input.value = '';
-		if (files.length === 0) return;
+		if (picked.length === 0) return;
 
 		notice = null;
+
+		// Filter before sending a byte. `planUpload` also reads .gitignore files that
+		// travel with the picked folder: they are not in the repo yet, so the
+		// server-side rules alone would not know about them.
+		const plan = await planUpload(picked, dirPath, ignore, (file) => file.text());
+		const { send: files } = plan;
+		let skipped = plan.skipped;
+
+		if (files.length === 0) {
+			notice = `${skipped} file${skipped === 1 ? '' : 's'} skipped by .gitignore`;
+			setTimeout(() => (notice = null), 6000);
+			return;
+		}
+
 		uploading = { done: 0, total: files.length, name: files[0].name };
 
 		for (const file of files) {
 			uploading = { ...uploading, name: file.name };
-			// Picked folders carry their path relative to the chosen root.
 			const relative = (file as any).webkitRelativePath || file.name;
 			try {
 				const res = await fetch(apiPath(relative), { method: 'PUT', body: file });
 				if (!res.ok) throw new Error((await res.text()) || res.statusText);
+				const result = await res.json().catch(() => null);
+				if (result?.skipped === 'gitignore') skipped++;
 			} catch (err: any) {
 				notice = `Could not upload ${relative}: ${err.message}`;
 				setTimeout(() => (notice = null), 6000);
@@ -71,6 +93,10 @@
 		}
 
 		uploading = null;
+		if (skipped > 0) {
+			notice = `${skipped} file${skipped === 1 ? '' : 's'} skipped by .gitignore`;
+			setTimeout(() => (notice = null), 6000);
+		}
 		await invalidateAll();
 	}
 
@@ -318,6 +344,25 @@
 				>
 					Folder
 				</button>
+			{/if}
+
+			{#if ignoreRules.rules > 0}
+				<span
+					class="text-text-muted order-1 flex shrink-0 items-center gap-1 font-mono text-[9px] tracking-wider uppercase"
+					title="Uploads are filtered by .gitignore"
+				>
+					<svg
+						viewBox="0 0 16 16"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="1.4"
+						class="h-3 w-3"
+					>
+						<path d="M3 3h10v10H3z" />
+						<path d="M6 6l4 4M10 6l-4 4" />
+					</svg>
+					gitignore · {ignoreRules.rules}
+				</span>
 			{/if}
 
 			<!-- Search (full-width row 2 on mobile, flex-1 centre on desktop) -->

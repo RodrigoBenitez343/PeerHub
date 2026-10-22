@@ -2,6 +2,7 @@
 	import type { PageData, ActionData } from './$types';
 	import { enhance } from '$app/forms';
 	import RepoHeader from '$lib/components/RepoHeader.svelte';
+	import Icon from '$lib/components/Icon.svelte';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
@@ -146,8 +147,9 @@
 					<button
 						type="submit"
 						disabled={pending}
-						class="bg-accent text-bg-primary shrink-0 rounded px-4 py-2 font-mono text-[10px] tracking-wider uppercase hover:brightness-110 disabled:opacity-50"
+						class="bg-accent text-bg-primary flex shrink-0 items-center gap-2 rounded px-4 py-2 font-mono text-[10px] tracking-wider uppercase hover:brightness-110 disabled:opacity-50"
 					>
+						<Icon name="commit" size={14} />
 						{pending ? 'Committing…' : 'Commit'}
 					</button>
 				</div>

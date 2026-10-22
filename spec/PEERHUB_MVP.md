@@ -571,3 +571,67 @@ branch page shows the same history → delete branch 303.
   existence; hiding them entirely would need a separate private discovery path.
 - Markdown renderer is intentionally small: no nested lists, footnotes, HTML blocks or syntax
   highlighting.
+
+---
+
+## 13. .gitignore-aware uploads (implemented)
+
+**Behaviour**
+
+- Rules come from `.gitignore` files already in the repo, at any depth. Each file's rules are
+  relative to its directory, parent files apply first, child files override — the order git uses.
+- Supported syntax: comments, blank lines, negation (`!keep.log`), directory-only (`build/`),
+  root anchoring (`/dist`), basename matching at any depth (`*.log`), `*`, `?`, `**` (`**/cache/`,
+  `docs/**/*.tmp`), and last-match-wins. `.git` is always ignored.
+- Not supported: `[a-z]` character classes, escaped trailing spaces. Rare for upload filtering.
+
+**Layers**
+
+- `src/lib/ignore.ts` — pure parser/matcher, no Node APIs, used on both sides.
+- `src/lib/server/ignores.ts` — reads the `.gitignore` files out of the shared drive and compiles
+  them. Cached per repo for 5 s; invalidated whenever a `.gitignore` is written or deleted.
+- `PUT /api/files/[id]/[...path]` — the authoritative guard. An ignored path returns
+  `{ ok: true, skipped: 'gitignore' }` and writes nothing, so direct API calls cannot bypass the
+  rules.
+- `FileGrid` — calls `planUpload()` from `src/lib/ignore.ts`, drops ignored files before sending a
+  byte, and reports `N files skipped by .gitignore`. The toolbar shows a `gitignore · N` badge
+  while rules are active.
+- `planUpload()` — the piece that makes folder upload actually correct. It reads the `.gitignore`
+  files carried _inside the picked folder_ (they are not in the repo yet at filter time) and
+  compiles them together with the repo's stored rules before deciding anything. It also returns
+  the queue with every `.gitignore` first, shallowest first, so the server guard sees the rules
+  before the bytes they exclude. Without this, uploading a fresh project folder sent the whole
+  `node_modules/` — the reported bug.
+- Rules only known to a _nested_ `.gitignore` that arrives inside the upload apply from that
+  folder down, same as git. A rule in the root `.gitignore` of a picked folder applies to the
+  whole `dirPath` it is uploaded into.
+
+**Verified**
+
+- Matcher unit pass: 22 cases covering dirs, negation, anchoring, `**`, nested files and `.git`
+  — 0 failures.
+- `planUpload()` unit pass (9 checks): a fresh project folder with no repo-side rules skips
+  `node_modules/`, `dist/`, `.env`, `*.log` (but keeps negated `keep.log`), nested `*.secret`,
+  and `.git/config`; `.gitignore` files are queued first; repo-level rules still apply when
+  uploading into a subdirectory.
+- HTTP round trip (11 checks): before any rule exists the same path is stored (baseline), then
+  after `.gitignore` + `sub/.gitignore` land, `node_modules/…`, `debug.log`, `sub/cache.tmp` and
+  `.git/config` all return `skipped: gitignore` and are absent over `GET` (404), while `keep.log`
+  and `sub/main.ts` are stored and readable.
+- Browser: files view shows `GITIGNORE · 6` with only the kept files listed.
+
+**Gaps**
+
+- The file grid is streamed by SvelteKit, so plain HTML string checks cannot see it — verification
+  needs a browser, not curl.
+- Ordering is enforced client-side only. A third-party client that PUTs files in arbitrary order
+  can still land an ignored file if it arrives before the `.gitignore` that excludes it; the
+  server cannot retro-delete it. Moving the guard to a batch/commit endpoint would close that.
+- Sync pairs (`sync.ts`) — a linked local folder is an upload too, so `syncOnce()` compiles the
+  rules from the repo's stored `.gitignore` files **plus** the mirrored folder's own (which are
+  not shared on the first run). Ignored paths are left alone in both directions: never pushed,
+  and never deleted from the shared drive. Verified live: a folder with `node_modules/`,
+  `debug.log` and `.git/config` synced only `README.md`, `src/app.ts` and `.gitignore`.
+- `forkRepo` copies whatever the source repo already stored, so it inherits the source's filtering
+  but does not re-check rules.
+- Editing `.gitignore` inside the app means uploading it again; there is no editor UI.

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { PageData } from './$types';
 	import RepoHeader from '$lib/components/RepoHeader.svelte';
+	import Icon from '$lib/components/Icon.svelte';
 
 	let { data }: { data: PageData } = $props();
 
@@ -188,8 +189,9 @@
 					{#if data.canCommit}
 						<a
 							href={commitHref}
-							class="bg-accent/90 hover:bg-accent text-bg-primary rounded px-2.5 py-1 font-mono text-[9px] tracking-wider uppercase transition"
+							class="bg-accent/90 hover:bg-accent text-bg-primary flex items-center gap-1.5 rounded px-3 py-1.5 font-mono text-[9px] tracking-wider uppercase transition"
 						>
+							<Icon name="commit" size={13} />
 							Commit changes
 						</a>
 					{/if}
@@ -201,9 +203,10 @@
 							<input type="hidden" name="description" value={data.repo.description ?? ''} />
 							<button
 								type="submit"
-								class="border-border text-text-secondary hover:border-accent hover:text-accent rounded border px-2.5 py-1 font-mono text-[9px] tracking-wider uppercase transition"
+								class="border-border text-text-secondary hover:border-accent hover:text-accent flex items-center gap-1.5 rounded border px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition"
 								title="Copy this repo to your device"
 							>
+								<Icon name="fork" size={13} />
 								Fork
 							</button>
 						</form>
@@ -258,17 +261,9 @@
 						<li class="border-border border-b">
 							<a
 								href={dirHref(parentDir)}
-								class="hover:bg-bg-hover flex items-center gap-2 px-3 py-1.5"
+								class="hover:bg-bg-hover flex items-center gap-2 px-3 py-2"
 							>
-								<svg
-									viewBox="0 0 16 16"
-									fill="none"
-									stroke="currentColor"
-									stroke-width="1.2"
-									class="text-text-muted h-3.5 w-3.5"
-								>
-									<path d="M3 8h10M7 4 3 8l4 4" />
-								</svg>
+								<Icon name="chevron-left" size={16} class="text-text-muted" />
 								<span class="text-text-secondary font-mono text-[11px]">..</span>
 							</a>
 						</li>
@@ -277,17 +272,9 @@
 						<li class="border-border border-b">
 							<a
 								href={dirHref(`${data.dir === '/' ? '' : data.dir}/${folder.name}`)}
-								class="hover:bg-bg-hover flex items-center gap-2 px-3 py-1.5"
+								class="hover:bg-bg-hover flex items-center gap-2 px-3 py-2"
 							>
-								<svg
-									viewBox="0 0 16 16"
-									fill="none"
-									stroke="currentColor"
-									stroke-width="1.2"
-									class="text-accent-dim h-3.5 w-3.5"
-								>
-									<path d="M2 4h4l1.5 1.5H14V13H2z" />
-								</svg>
+								<Icon name="folder" size={17} class="text-accent" />
 								<span class="text-text-primary min-w-0 flex-1 truncate font-mono text-[11px]">
 									{folder.name}/
 								</span>
@@ -299,18 +286,9 @@
 						<li class="border-border border-b">
 							<a
 								href={fileHref(entry.path)}
-								class="hover:bg-bg-hover flex items-center gap-2 px-3 py-1.5"
+								class="hover:bg-bg-hover flex items-center gap-2 px-3 py-2"
 							>
-								<svg
-									viewBox="0 0 16 16"
-									fill="none"
-									stroke="currentColor"
-									stroke-width="1.2"
-									class="text-text-muted h-3.5 w-3.5"
-								>
-									<path d="M4 2h5l3 3v9H4z" />
-									<path d="M9 2v3h3" />
-								</svg>
+								<Icon name="file" size={17} class="text-text-muted" />
 								<span class="text-text-secondary min-w-0 flex-1 truncate font-mono text-[11px]">
 									{entry.name}
 								</span>

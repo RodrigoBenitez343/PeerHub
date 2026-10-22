@@ -6,6 +6,8 @@ import { randombytes_buf } from 'sodium-native';
 
 import { writeIntoStream } from './shared-drive.js';
 import { invalidateEntries } from './loaders.js';
+import { loadIgnoreSources } from './ignores.js';
+import { compileIgnore, type IgnoreMatcher, type IgnoreSource } from '$lib/ignore';
 import type DriveSession from './session.js';
 
 // Two-way local sync: a local folder and the shared file system are reconciled
@@ -255,6 +257,12 @@ async function syncOnce(
 	const summary: SyncSummary = { added: 0, updated: 0, deleted: 0, conflicts: 0, errors: [] };
 	const state = readState(stateFile);
 
+	// A mirrored folder is an upload: the same .gitignore rules that filter the
+	// browser upload apply here. Local rules are read too — on the first run the
+	// folder's .gitignore has not been shared yet, and that is exactly when a
+	// linked project would otherwise mirror its node_modules.
+	const ignore = await syncIgnore(session, local);
+
 	const localFiles = await localManifest(local);
 	const sharedFiles = new Map<string, SideStat>();
 	for (const file of await drive.manifestShared('/')) {
@@ -302,13 +310,19 @@ async function syncOnce(
 		const sharedStat = sharedFiles.get(filePath);
 		const base = state[filePath];
 
+		// Ignored paths are left alone in both directions: never pushed, and
+		// never removed from the shared drive (that data is not ours to drop).
+		const ignored = ignore.ignored(filePath);
+
 		const localChanged = !unchanged(localStat, base?.local);
 		const sharedChanged = !unchanged(sharedStat, base?.shared);
 		if (!localChanged && !sharedChanged) continue;
 
 		try {
 			if (localChanged && !sharedChanged) {
-				if (localStat && !sharedStat) {
+				if (ignored) {
+					// Local-only change: nothing to propagate upward.
+				} else if (localStat && !sharedStat) {
 					await localToShared(filePath);
 					summary.added++;
 				} else if (localStat && sharedStat) {
@@ -335,8 +349,9 @@ async function syncOnce(
 				// made ourselves, with a fresher mtime on one side).
 				if (localStat.size !== sharedStat.size) {
 					summary.conflicts++;
-					if (newer(localStat, sharedStat, base)) await localToShared(filePath);
-					else await sharedToLocal(filePath);
+					if (newer(localStat, sharedStat, base)) {
+						if (!ignored) await localToShared(filePath);
+					} else await sharedToLocal(filePath);
 				}
 			} else if (localStat && !sharedStat && base?.shared) {
 				// Deleted on the shared side but edited here — keep the edit.
@@ -361,6 +376,46 @@ async function syncOnce(
 
 	writeState(stateFile, state);
 	return summary;
+}
+
+// Rules for one sync run: the repo's stored .gitignore files plus the mirrored
+// folder's own — on the first run the folder's files are not shared yet, and
+// that is exactly when their rules matter.
+async function syncIgnore(session: DriveSession, local: Localdrive): Promise<IgnoreMatcher> {
+	const sources: IgnoreSource[] = [];
+
+	try {
+		sources.push(...(await loadIgnoreSources(session)));
+	} catch {
+		// Shared rules unreachable: the local ones still apply.
+	}
+
+	for await (const entry of local.list('/')) {
+		if (!entry?.key || entry.value?.linkname) continue;
+		if (!entry.key.endsWith('/.gitignore')) continue;
+		try {
+			const text = await readLocalText(local, entry.key);
+			const base = entry.key.slice(0, entry.key.lastIndexOf('/')) || '/';
+			sources.push({ base, text });
+		} catch {
+			// Unreadable ignore file: the remaining rules still apply.
+		}
+	}
+
+	return compileIgnore(sources);
+}
+
+const MAX_IGNORE_BYTES = 64 * 1024;
+
+async function readLocalText(local: Localdrive, filePath: string): Promise<string> {
+	const chunks: Buffer[] = [];
+	let size = 0;
+	for await (const chunk of local.createReadStream(filePath)) {
+		chunks.push(Buffer.from(chunk));
+		size += chunk.byteLength;
+		if (size >= MAX_IGNORE_BYTES) break;
+	}
+	return Buffer.concat(chunks).subarray(0, MAX_IGNORE_BYTES).toString('utf-8');
 }
 
 async function localManifest(local: Localdrive): Promise<Map<string, SideStat>> {

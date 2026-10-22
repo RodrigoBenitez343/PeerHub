@@ -4,7 +4,7 @@
 	import DownloadsTray from '$lib/components/DownloadsTray.svelte';
 	import type { LayoutData } from './$types';
 	import { page } from '$app/state';
-	import logo from '$lib/assets/images/ghost.png';
+	import logo from '$lib/assets/images/ghost-icon.png';
 
 	let { data, children }: { data: LayoutData; children: any } = $props();
 

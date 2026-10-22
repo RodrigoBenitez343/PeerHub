@@ -2,7 +2,8 @@
 	import type { PageData, ActionData } from './$types';
 	import { enhance } from '$app/forms';
 	import { page } from '$app/state';
-	import logo from '$lib/assets/images/ghost.png';
+	import logo from '$lib/assets/images/ghost-mark.png';
+	import Icon from '$lib/components/Icon.svelte';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
@@ -21,8 +22,8 @@
 
 <div class="flex-1 overflow-auto">
 	<div class="mx-auto w-full max-w-3xl px-4 py-8 md:py-10">
-		<header class="mb-8 flex items-start gap-3">
-			<img src={logo} alt="" class="mt-0.5 h-8 w-8 shrink-0 opacity-80" />
+		<header class="mb-8 flex items-start gap-4">
+			<img src={logo} alt="" class="mt-0.5 h-14 w-14 shrink-0" />
 			<div class="min-w-0 flex-1">
 				<h1 class="text-text-primary font-mono text-sm tracking-[3px] uppercase">PeerHub</h1>
 				<p class="text-text-muted mt-1 text-[11px]">
@@ -171,22 +172,32 @@
 			<div class="mb-8 flex flex-wrap gap-2">
 				<a
 					href="/?action=new"
-					class="bg-accent text-bg-primary rounded px-4 py-2 font-mono text-[10px] tracking-wider uppercase transition hover:brightness-110"
+					class="bg-accent text-bg-primary flex items-center gap-2 rounded px-4 py-2.5 font-mono text-[10px] tracking-wider uppercase transition hover:brightness-110"
 				>
+					<Icon name="plus" size={15} />
 					New repository
 				</a>
 				<a
 					href="/?action=join"
-					class="border-border text-text-secondary hover:border-accent-dim hover:text-accent rounded border px-4 py-2 font-mono text-[10px] tracking-wider uppercase transition"
+					class="border-border text-text-secondary hover:border-accent hover:text-accent flex items-center gap-2 rounded border px-4 py-2.5 font-mono text-[10px] tracking-wider uppercase transition"
 				>
+					<Icon name="link" size={15} />
 					Join with invite
+				</a>
+				<a
+					href="/explore"
+					class="border-border text-text-secondary hover:border-accent hover:text-accent flex items-center gap-2 rounded border px-4 py-2.5 font-mono text-[10px] tracking-wider uppercase transition"
+				>
+					<Icon name="globe" size={15} />
+					Explore
 				</a>
 				<form method="POST" action="?/refresh" use:enhance={submit('refresh')}>
 					<button
 						type="submit"
 						disabled={pending === 'refresh'}
-						class="border-border text-text-muted hover:text-text-secondary rounded border px-3 py-2 font-mono text-[10px] tracking-wider uppercase transition disabled:opacity-50"
+						class="border-border text-text-muted hover:text-text-secondary flex items-center gap-2 rounded border px-3 py-2.5 font-mono text-[10px] tracking-wider uppercase transition disabled:opacity-50"
 					>
+						<Icon name="refresh" size={15} />
 						{pending === 'refresh' ? 'Asking peers…' : 'Refresh peers'}
 					</button>
 				</form>

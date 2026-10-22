@@ -2,20 +2,20 @@
 @plugin '@tailwindcss/forms';
 
 @theme {
-	--color-bg-primary: #0a0a0c;
-	--color-bg-secondary: #111116;
-	--color-bg-tertiary: #1a1a22;
-	--color-bg-hover: #22222e;
-	--color-accent: #c8a84e;
-	--color-accent-dim: #a68c42;
-	--color-accent-glow: rgba(200, 168, 78, 0.15);
-	--color-text-primary: #e4e4e8;
-	--color-text-secondary: #9a9aa4;
-	--color-text-muted: #5a5a66;
-	--color-border: #27272e;
-	--color-border-accent: #3d3520;
-	--color-success: #22c55e;
-	--color-danger: #ef4444;
+	--color-bg-primary: #05090d;
+	--color-bg-secondary: #0a1118;
+	--color-bg-tertiary: #101b24;
+	--color-bg-hover: #152430;
+	--color-accent: #22d3ee;
+	--color-accent-dim: #0e7490;
+	--color-accent-glow: rgba(34, 211, 238, 0.16);
+	--color-text-primary: #e6f4f8;
+	--color-text-secondary: #9db3bf;
+	--color-text-muted: #5d7382;
+	--color-border: #16242e;
+	--color-border-accent: #155e75;
+	--color-success: #34d399;
+	--color-danger: #f87171;
 
 	--font-sans: ui-sans-serif, system-ui, -apple-system, sans-serif;
 	--font-mono: ui-monospace, 'SF Mono', Monaco, monospace;
@@ -28,7 +28,15 @@ body {
 }
 
 body {
-	background: var(--color-bg-primary);
+	background:
+		radial-gradient(1200px 600px at 12% -10%, rgba(34, 211, 238, 0.09), transparent 60%),
+		radial-gradient(900px 500px at 100% 0%, rgba(14, 116, 144, 0.12), transparent 55%),
+		var(--color-bg-primary);
+	color: var(--color-text-primary);
+}
+
+::selection {
+	background: var(--color-accent-glow);
 	color: var(--color-text-primary);
 }
 

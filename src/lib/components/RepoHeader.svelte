@@ -1,4 +1,7 @@
 <script lang="ts">
+	import Icon from './Icon.svelte';
+	import type { IconName } from '$lib/icons';
+
 	export type RepoTab = 'files' | 'code' | 'commit' | 'settings';
 
 	let {
@@ -17,56 +20,49 @@
 		forkedFrom?: string | null;
 	} = $props();
 
-	const tabs = $derived.by((): Array<{ key: RepoTab; label: string; href: string }> => [
-		{ key: 'files', label: 'Files', href: `/drive/${id}` },
-		{ key: 'code', label: 'Code', href: `/drive/${id}/code` },
-		{ key: 'commit', label: 'Commit', href: `/drive/${id}/commit` },
-		{ key: 'settings', label: 'Settings', href: `/drive/${id}/settings` }
-	]);
+	const tabs = $derived.by(
+		(): Array<{ key: RepoTab; label: string; icon: IconName; href: string }> => [
+			{ key: 'files', label: 'Files', icon: 'folder', href: `/drive/${id}` },
+			{ key: 'code', label: 'Code', icon: 'code', href: `/drive/${id}/code` },
+			{ key: 'commit', label: 'Commit', icon: 'commit', href: `/drive/${id}/commit` },
+			{ key: 'settings', label: 'Settings', icon: 'settings', href: `/drive/${id}/settings` }
+		]
+	);
 </script>
 
 <header class="border-border bg-bg-secondary border-b">
-	<div class="flex items-center gap-2 px-3 pt-2 md:px-4">
+	<div class="flex items-center gap-2 px-3 pt-2.5 md:px-4">
 		<a
 			href="/"
 			title="All repositories"
-			class="text-text-muted hover:text-accent shrink-0 rounded p-1 transition"
+			class="text-text-muted hover:text-accent rounded p-1.5 transition"
 		>
-			<svg
-				viewBox="0 0 16 16"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="1.4"
-				class="h-3.5 w-3.5"
-			>
-				<path d="M10 3 5 8l5 5" />
-			</svg>
+			<Icon name="chevron-left" size={20} />
 		</a>
-		<span class="text-text-primary truncate font-mono text-xs tracking-wider">{name}</span>
+		<span class="text-text-primary truncate font-mono text-sm tracking-wider">{name}</span>
 		<span
-			class="border-border text-text-muted shrink-0 rounded border px-1.5 py-0.5 font-mono text-[9px] tracking-wider uppercase"
+			class="border-border-accent text-accent/80 shrink-0 rounded border px-2 py-0.5 font-mono text-[9px] tracking-wider uppercase"
 		>
 			{isGuest ? 'mirror' : visibility}
 		</span>
 		{#if forkedFrom}
-			<span
-				class="text-text-muted shrink-0 font-mono text-[9px]"
-				title={`forked from ${forkedFrom}`}
-			>
+			<span class="text-text-muted flex shrink-0 items-center gap-1 font-mono text-[9px]">
+				<Icon name="fork" size={12} />
 				fork
 			</span>
 		{/if}
 	</div>
 
-	<nav class="mt-1 flex gap-1 overflow-x-auto px-2 md:px-3">
+	<nav class="mt-1.5 flex gap-1 overflow-x-auto px-2 md:px-3">
 		{#each tabs as tab (tab.key)}
 			<a
 				href={tab.href}
-				class="shrink-0 border-b-2 px-2.5 py-1.5 font-mono text-[10px] tracking-wider uppercase transition {active ===
+				class="flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2 font-mono text-[10px] tracking-wider uppercase transition {active ===
 				tab.key
 					? 'border-b-accent text-accent'
 					: 'text-text-muted hover:text-text-secondary border-b-transparent'}"
 			>
+				<Icon name={tab.icon} size={15} />
 				{tab.label}
 			</a>
 		{/each}

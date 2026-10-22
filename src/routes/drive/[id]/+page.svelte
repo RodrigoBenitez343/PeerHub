@@ -110,6 +110,7 @@
 					{peers}
 					isGuest={drive.isGuest}
 					canWrite={!drive.isGuest || peers > 0}
+					ignore={data.ignore}
 				/>
 			{:else}
 				<div
@@ -138,6 +139,7 @@
 				{peers}
 				isGuest={drive.isGuest}
 				canWrite={!drive.isGuest || peers > 0}
+				ignore={data.ignore}
 			/>
 		{/await}
 	</section>
