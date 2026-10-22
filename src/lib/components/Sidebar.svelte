@@ -40,7 +40,7 @@
 		{#if sessions.length === 0}
 			<div class="flex flex-col items-center gap-2 px-4 py-8 text-center">
 				<img src={logo} alt="" class="h-6 w-6 opacity-20" />
-				<p class="text-text-muted font-mono text-[10px] tracking-wider uppercase">No drives yet</p>
+				<p class="text-text-muted font-mono text-[10px] tracking-wider uppercase">No repos yet</p>
 			</div>
 		{:else}
 			<ul>
@@ -108,7 +108,7 @@
 			>
 				<path d="M8 2v12M2 8h12" />
 			</svg>
-			New Drive
+			New repository
 		</a>
 		<a
 			href="/?action=join"
@@ -123,7 +123,7 @@
 			>
 				<path d="M8 2v8M4 7l4 4 4-4M2 13h12" />
 			</svg>
-			Accept Invite
+			Join with invite
 		</a>
 	</footer>
 </aside>

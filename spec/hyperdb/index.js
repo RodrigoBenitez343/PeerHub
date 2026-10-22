@@ -4,7 +4,7 @@
 import { IndexEncoder, c, b4a } from 'hyperdb/runtime';
 import { version, getEncoding, setVersion } from './messages.js';
 
-const versions = { schema: version, db: 1 };
+const versions = { schema: version, db: 3 };
 
 // '@ghostdrive/sessions' collection key
 const collection0_key = new IndexEncoder([IndexEncoder.STRING], { prefix: 0 });
@@ -449,9 +449,2743 @@ const index6 = {
 };
 collection3.indexes.push(index6);
 
-const collections = [collection0, collection1, collection2, collection3];
+// '@ghostdrive/users' collection key
+const collection7_key = new IndexEncoder([IndexEncoder.STRING], { prefix: 7 });
 
-const indexes = [index4, index5, index6];
+function collection7_indexify(record) {
+	const a = record.peerKey;
+	return a === undefined ? [] : [a];
+}
+
+// '@ghostdrive/users' value encoding
+const collection7_enc = getEncoding('@ghostdrive/user/hyperdb#7');
+
+// '@ghostdrive/users' reconstruction function
+function collection7_reconstruct(schemaVersion, keyBuf, valueBuf) {
+	const key = collection7_key.decode(keyBuf);
+	setVersion(schemaVersion);
+	const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf };
+	const type = c.uint.decode(state);
+	if (type !== 0) throw new Error('Unknown collection type: ' + type);
+	collection7.decodedVersion = c.uint.decode(state);
+	const record = collection7_enc.decode(state);
+	record.peerKey = key[0];
+	return record;
+}
+// '@ghostdrive/users' key reconstruction function
+function collection7_reconstruct_key(keyBuf) {
+	const key = collection7_key.decode(keyBuf);
+	return {
+		peerKey: key[0]
+	};
+}
+
+// '@ghostdrive/users'
+const collection7 = {
+	name: '@ghostdrive/users',
+	id: 7,
+	version: 2,
+	encodeKey(record) {
+		const key = [record.peerKey];
+		return collection7_key.encode(key);
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return collection7_key.encodeRange({
+			gt: gt ? collection7_indexify(gt) : null,
+			lt: lt ? collection7_indexify(lt) : null,
+			gte: gte ? collection7_indexify(gte) : null,
+			lte: lte ? collection7_indexify(lte) : null
+		});
+	},
+	encodeValue(schemaVersion, collectionVersion, record) {
+		setVersion(schemaVersion);
+		const state = { start: 0, end: 2, buffer: null };
+		collection7_enc.preencode(state, record);
+		state.buffer = b4a.allocUnsafe(state.end);
+		state.buffer[state.start++] = 0;
+		state.buffer[state.start++] = collectionVersion;
+		collection7_enc.encode(state, record);
+		return state.buffer;
+	},
+	trigger: null,
+	reconstruct: collection7_reconstruct,
+	reconstructKey: collection7_reconstruct_key,
+	indexes: [],
+	decodedVersion: 0
+};
+
+// '@ghostdrive/repos' collection key
+const collection8_key = new IndexEncoder([IndexEncoder.STRING], { prefix: 8 });
+
+function collection8_indexify(record) {
+	const a = record.id;
+	return a === undefined ? [] : [a];
+}
+
+// '@ghostdrive/repos' value encoding
+const collection8_enc = getEncoding('@ghostdrive/repo/hyperdb#8');
+
+// '@ghostdrive/repos' reconstruction function
+function collection8_reconstruct(schemaVersion, keyBuf, valueBuf) {
+	const key = collection8_key.decode(keyBuf);
+	setVersion(schemaVersion);
+	const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf };
+	const type = c.uint.decode(state);
+	if (type !== 0) throw new Error('Unknown collection type: ' + type);
+	collection8.decodedVersion = c.uint.decode(state);
+	const record = collection8_enc.decode(state);
+	record.id = key[0];
+	return record;
+}
+// '@ghostdrive/repos' key reconstruction function
+function collection8_reconstruct_key(keyBuf) {
+	const key = collection8_key.decode(keyBuf);
+	return {
+		id: key[0]
+	};
+}
+
+// '@ghostdrive/repos'
+const collection8 = {
+	name: '@ghostdrive/repos',
+	id: 8,
+	version: 2,
+	encodeKey(record) {
+		const key = [record.id];
+		return collection8_key.encode(key);
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return collection8_key.encodeRange({
+			gt: gt ? collection8_indexify(gt) : null,
+			lt: lt ? collection8_indexify(lt) : null,
+			gte: gte ? collection8_indexify(gte) : null,
+			lte: lte ? collection8_indexify(lte) : null
+		});
+	},
+	encodeValue(schemaVersion, collectionVersion, record) {
+		setVersion(schemaVersion);
+		const state = { start: 0, end: 2, buffer: null };
+		collection8_enc.preencode(state, record);
+		state.buffer = b4a.allocUnsafe(state.end);
+		state.buffer[state.start++] = 0;
+		state.buffer[state.start++] = collectionVersion;
+		collection8_enc.encode(state, record);
+		return state.buffer;
+	},
+	trigger: null,
+	reconstruct: collection8_reconstruct,
+	reconstructKey: collection8_reconstruct_key,
+	indexes: [],
+	decodedVersion: 0
+};
+
+// '@ghostdrive/refs' collection key
+const collection9_key = new IndexEncoder([IndexEncoder.STRING, IndexEncoder.STRING], { prefix: 9 });
+
+function collection9_indexify(record) {
+	const arr = [];
+
+	const a0 = record.repoId;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.name;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	return arr;
+}
+
+// '@ghostdrive/refs' value encoding
+const collection9_enc = getEncoding('@ghostdrive/ref/hyperdb#9');
+
+// '@ghostdrive/refs' reconstruction function
+function collection9_reconstruct(schemaVersion, keyBuf, valueBuf) {
+	const key = collection9_key.decode(keyBuf);
+	setVersion(schemaVersion);
+	const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf };
+	const type = c.uint.decode(state);
+	if (type !== 0) throw new Error('Unknown collection type: ' + type);
+	collection9.decodedVersion = c.uint.decode(state);
+	const record = collection9_enc.decode(state);
+	record.repoId = key[0];
+	record.name = key[1];
+	return record;
+}
+// '@ghostdrive/refs' key reconstruction function
+function collection9_reconstruct_key(keyBuf) {
+	const key = collection9_key.decode(keyBuf);
+	return {
+		repoId: key[0],
+		name: key[1]
+	};
+}
+
+// '@ghostdrive/refs'
+const collection9 = {
+	name: '@ghostdrive/refs',
+	id: 9,
+	version: 2,
+	encodeKey(record) {
+		const key = [record.repoId, record.name];
+		return collection9_key.encode(key);
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return collection9_key.encodeRange({
+			gt: gt ? collection9_indexify(gt) : null,
+			lt: lt ? collection9_indexify(lt) : null,
+			gte: gte ? collection9_indexify(gte) : null,
+			lte: lte ? collection9_indexify(lte) : null
+		});
+	},
+	encodeValue(schemaVersion, collectionVersion, record) {
+		setVersion(schemaVersion);
+		const state = { start: 0, end: 2, buffer: null };
+		collection9_enc.preencode(state, record);
+		state.buffer = b4a.allocUnsafe(state.end);
+		state.buffer[state.start++] = 0;
+		state.buffer[state.start++] = collectionVersion;
+		collection9_enc.encode(state, record);
+		return state.buffer;
+	},
+	trigger: null,
+	reconstruct: collection9_reconstruct,
+	reconstructKey: collection9_reconstruct_key,
+	indexes: [],
+	decodedVersion: 0
+};
+
+// '@ghostdrive/commits' collection key
+const collection10_key = new IndexEncoder([IndexEncoder.STRING, IndexEncoder.STRING], {
+	prefix: 10
+});
+
+function collection10_indexify(record) {
+	const arr = [];
+
+	const a0 = record.repoId;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.sha;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	return arr;
+}
+
+// '@ghostdrive/commits' value encoding
+const collection10_enc = getEncoding('@ghostdrive/commit/hyperdb#10');
+
+// '@ghostdrive/commits' reconstruction function
+function collection10_reconstruct(schemaVersion, keyBuf, valueBuf) {
+	const key = collection10_key.decode(keyBuf);
+	setVersion(schemaVersion);
+	const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf };
+	const type = c.uint.decode(state);
+	if (type !== 0) throw new Error('Unknown collection type: ' + type);
+	collection10.decodedVersion = c.uint.decode(state);
+	const record = collection10_enc.decode(state);
+	record.repoId = key[0];
+	record.sha = key[1];
+	return record;
+}
+// '@ghostdrive/commits' key reconstruction function
+function collection10_reconstruct_key(keyBuf) {
+	const key = collection10_key.decode(keyBuf);
+	return {
+		repoId: key[0],
+		sha: key[1]
+	};
+}
+
+// '@ghostdrive/commits'
+const collection10 = {
+	name: '@ghostdrive/commits',
+	id: 10,
+	version: 2,
+	encodeKey(record) {
+		const key = [record.repoId, record.sha];
+		return collection10_key.encode(key);
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return collection10_key.encodeRange({
+			gt: gt ? collection10_indexify(gt) : null,
+			lt: lt ? collection10_indexify(lt) : null,
+			gte: gte ? collection10_indexify(gte) : null,
+			lte: lte ? collection10_indexify(lte) : null
+		});
+	},
+	encodeValue(schemaVersion, collectionVersion, record) {
+		setVersion(schemaVersion);
+		const state = { start: 0, end: 2, buffer: null };
+		collection10_enc.preencode(state, record);
+		state.buffer = b4a.allocUnsafe(state.end);
+		state.buffer[state.start++] = 0;
+		state.buffer[state.start++] = collectionVersion;
+		collection10_enc.encode(state, record);
+		return state.buffer;
+	},
+	trigger: null,
+	reconstruct: collection10_reconstruct,
+	reconstructKey: collection10_reconstruct_key,
+	indexes: [],
+	decodedVersion: 0
+};
+
+// '@ghostdrive/issues' collection key
+const collection11_key = new IndexEncoder([IndexEncoder.STRING, IndexEncoder.UINT], { prefix: 11 });
+
+function collection11_indexify(record) {
+	const arr = [];
+
+	const a0 = record.repoId;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.number;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	return arr;
+}
+
+// '@ghostdrive/issues' value encoding
+const collection11_enc = getEncoding('@ghostdrive/issue/hyperdb#11');
+
+// '@ghostdrive/issues' reconstruction function
+function collection11_reconstruct(schemaVersion, keyBuf, valueBuf) {
+	const key = collection11_key.decode(keyBuf);
+	setVersion(schemaVersion);
+	const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf };
+	const type = c.uint.decode(state);
+	if (type !== 0) throw new Error('Unknown collection type: ' + type);
+	collection11.decodedVersion = c.uint.decode(state);
+	const record = collection11_enc.decode(state);
+	record.repoId = key[0];
+	record.number = key[1];
+	return record;
+}
+// '@ghostdrive/issues' key reconstruction function
+function collection11_reconstruct_key(keyBuf) {
+	const key = collection11_key.decode(keyBuf);
+	return {
+		repoId: key[0],
+		number: key[1]
+	};
+}
+
+// '@ghostdrive/issues'
+const collection11 = {
+	name: '@ghostdrive/issues',
+	id: 11,
+	version: 2,
+	encodeKey(record) {
+		const key = [record.repoId, record.number];
+		return collection11_key.encode(key);
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return collection11_key.encodeRange({
+			gt: gt ? collection11_indexify(gt) : null,
+			lt: lt ? collection11_indexify(lt) : null,
+			gte: gte ? collection11_indexify(gte) : null,
+			lte: lte ? collection11_indexify(lte) : null
+		});
+	},
+	encodeValue(schemaVersion, collectionVersion, record) {
+		setVersion(schemaVersion);
+		const state = { start: 0, end: 2, buffer: null };
+		collection11_enc.preencode(state, record);
+		state.buffer = b4a.allocUnsafe(state.end);
+		state.buffer[state.start++] = 0;
+		state.buffer[state.start++] = collectionVersion;
+		collection11_enc.encode(state, record);
+		return state.buffer;
+	},
+	trigger: null,
+	reconstruct: collection11_reconstruct,
+	reconstructKey: collection11_reconstruct_key,
+	indexes: [],
+	decodedVersion: 0
+};
+
+// '@ghostdrive/labels' collection key
+const collection12_key = new IndexEncoder([IndexEncoder.STRING, IndexEncoder.STRING], {
+	prefix: 12
+});
+
+function collection12_indexify(record) {
+	const arr = [];
+
+	const a0 = record.repoId;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.id;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	return arr;
+}
+
+// '@ghostdrive/labels' value encoding
+const collection12_enc = getEncoding('@ghostdrive/label/hyperdb#12');
+
+// '@ghostdrive/labels' reconstruction function
+function collection12_reconstruct(schemaVersion, keyBuf, valueBuf) {
+	const key = collection12_key.decode(keyBuf);
+	setVersion(schemaVersion);
+	const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf };
+	const type = c.uint.decode(state);
+	if (type !== 0) throw new Error('Unknown collection type: ' + type);
+	collection12.decodedVersion = c.uint.decode(state);
+	const record = collection12_enc.decode(state);
+	record.repoId = key[0];
+	record.id = key[1];
+	return record;
+}
+// '@ghostdrive/labels' key reconstruction function
+function collection12_reconstruct_key(keyBuf) {
+	const key = collection12_key.decode(keyBuf);
+	return {
+		repoId: key[0],
+		id: key[1]
+	};
+}
+
+// '@ghostdrive/labels'
+const collection12 = {
+	name: '@ghostdrive/labels',
+	id: 12,
+	version: 2,
+	encodeKey(record) {
+		const key = [record.repoId, record.id];
+		return collection12_key.encode(key);
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return collection12_key.encodeRange({
+			gt: gt ? collection12_indexify(gt) : null,
+			lt: lt ? collection12_indexify(lt) : null,
+			gte: gte ? collection12_indexify(gte) : null,
+			lte: lte ? collection12_indexify(lte) : null
+		});
+	},
+	encodeValue(schemaVersion, collectionVersion, record) {
+		setVersion(schemaVersion);
+		const state = { start: 0, end: 2, buffer: null };
+		collection12_enc.preencode(state, record);
+		state.buffer = b4a.allocUnsafe(state.end);
+		state.buffer[state.start++] = 0;
+		state.buffer[state.start++] = collectionVersion;
+		collection12_enc.encode(state, record);
+		return state.buffer;
+	},
+	trigger: null,
+	reconstruct: collection12_reconstruct,
+	reconstructKey: collection12_reconstruct_key,
+	indexes: [],
+	decodedVersion: 0
+};
+
+// '@ghostdrive/milestones' collection key
+const collection13_key = new IndexEncoder([IndexEncoder.STRING, IndexEncoder.STRING], {
+	prefix: 13
+});
+
+function collection13_indexify(record) {
+	const arr = [];
+
+	const a0 = record.repoId;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.id;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	return arr;
+}
+
+// '@ghostdrive/milestones' value encoding
+const collection13_enc = getEncoding('@ghostdrive/milestone/hyperdb#13');
+
+// '@ghostdrive/milestones' reconstruction function
+function collection13_reconstruct(schemaVersion, keyBuf, valueBuf) {
+	const key = collection13_key.decode(keyBuf);
+	setVersion(schemaVersion);
+	const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf };
+	const type = c.uint.decode(state);
+	if (type !== 0) throw new Error('Unknown collection type: ' + type);
+	collection13.decodedVersion = c.uint.decode(state);
+	const record = collection13_enc.decode(state);
+	record.repoId = key[0];
+	record.id = key[1];
+	return record;
+}
+// '@ghostdrive/milestones' key reconstruction function
+function collection13_reconstruct_key(keyBuf) {
+	const key = collection13_key.decode(keyBuf);
+	return {
+		repoId: key[0],
+		id: key[1]
+	};
+}
+
+// '@ghostdrive/milestones'
+const collection13 = {
+	name: '@ghostdrive/milestones',
+	id: 13,
+	version: 2,
+	encodeKey(record) {
+		const key = [record.repoId, record.id];
+		return collection13_key.encode(key);
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return collection13_key.encodeRange({
+			gt: gt ? collection13_indexify(gt) : null,
+			lt: lt ? collection13_indexify(lt) : null,
+			gte: gte ? collection13_indexify(gte) : null,
+			lte: lte ? collection13_indexify(lte) : null
+		});
+	},
+	encodeValue(schemaVersion, collectionVersion, record) {
+		setVersion(schemaVersion);
+		const state = { start: 0, end: 2, buffer: null };
+		collection13_enc.preencode(state, record);
+		state.buffer = b4a.allocUnsafe(state.end);
+		state.buffer[state.start++] = 0;
+		state.buffer[state.start++] = collectionVersion;
+		collection13_enc.encode(state, record);
+		return state.buffer;
+	},
+	trigger: null,
+	reconstruct: collection13_reconstruct,
+	reconstructKey: collection13_reconstruct_key,
+	indexes: [],
+	decodedVersion: 0
+};
+
+// '@ghostdrive/pulls' collection key
+const collection14_key = new IndexEncoder([IndexEncoder.STRING, IndexEncoder.UINT], { prefix: 14 });
+
+function collection14_indexify(record) {
+	const arr = [];
+
+	const a0 = record.repoId;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.number;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	return arr;
+}
+
+// '@ghostdrive/pulls' value encoding
+const collection14_enc = getEncoding('@ghostdrive/pull/hyperdb#14');
+
+// '@ghostdrive/pulls' reconstruction function
+function collection14_reconstruct(schemaVersion, keyBuf, valueBuf) {
+	const key = collection14_key.decode(keyBuf);
+	setVersion(schemaVersion);
+	const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf };
+	const type = c.uint.decode(state);
+	if (type !== 0) throw new Error('Unknown collection type: ' + type);
+	collection14.decodedVersion = c.uint.decode(state);
+	const record = collection14_enc.decode(state);
+	record.repoId = key[0];
+	record.number = key[1];
+	return record;
+}
+// '@ghostdrive/pulls' key reconstruction function
+function collection14_reconstruct_key(keyBuf) {
+	const key = collection14_key.decode(keyBuf);
+	return {
+		repoId: key[0],
+		number: key[1]
+	};
+}
+
+// '@ghostdrive/pulls'
+const collection14 = {
+	name: '@ghostdrive/pulls',
+	id: 14,
+	version: 2,
+	encodeKey(record) {
+		const key = [record.repoId, record.number];
+		return collection14_key.encode(key);
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return collection14_key.encodeRange({
+			gt: gt ? collection14_indexify(gt) : null,
+			lt: lt ? collection14_indexify(lt) : null,
+			gte: gte ? collection14_indexify(gte) : null,
+			lte: lte ? collection14_indexify(lte) : null
+		});
+	},
+	encodeValue(schemaVersion, collectionVersion, record) {
+		setVersion(schemaVersion);
+		const state = { start: 0, end: 2, buffer: null };
+		collection14_enc.preencode(state, record);
+		state.buffer = b4a.allocUnsafe(state.end);
+		state.buffer[state.start++] = 0;
+		state.buffer[state.start++] = collectionVersion;
+		collection14_enc.encode(state, record);
+		return state.buffer;
+	},
+	trigger: null,
+	reconstruct: collection14_reconstruct,
+	reconstructKey: collection14_reconstruct_key,
+	indexes: [],
+	decodedVersion: 0
+};
+
+// '@ghostdrive/reviews' collection key
+const collection15_key = new IndexEncoder([IndexEncoder.STRING], { prefix: 15 });
+
+function collection15_indexify(record) {
+	const a = record.id;
+	return a === undefined ? [] : [a];
+}
+
+// '@ghostdrive/reviews' value encoding
+const collection15_enc = getEncoding('@ghostdrive/review/hyperdb#15');
+
+// '@ghostdrive/reviews' reconstruction function
+function collection15_reconstruct(schemaVersion, keyBuf, valueBuf) {
+	const key = collection15_key.decode(keyBuf);
+	setVersion(schemaVersion);
+	const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf };
+	const type = c.uint.decode(state);
+	if (type !== 0) throw new Error('Unknown collection type: ' + type);
+	collection15.decodedVersion = c.uint.decode(state);
+	const record = collection15_enc.decode(state);
+	record.id = key[0];
+	return record;
+}
+// '@ghostdrive/reviews' key reconstruction function
+function collection15_reconstruct_key(keyBuf) {
+	const key = collection15_key.decode(keyBuf);
+	return {
+		id: key[0]
+	};
+}
+
+// '@ghostdrive/reviews'
+const collection15 = {
+	name: '@ghostdrive/reviews',
+	id: 15,
+	version: 2,
+	encodeKey(record) {
+		const key = [record.id];
+		return collection15_key.encode(key);
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return collection15_key.encodeRange({
+			gt: gt ? collection15_indexify(gt) : null,
+			lt: lt ? collection15_indexify(lt) : null,
+			gte: gte ? collection15_indexify(gte) : null,
+			lte: lte ? collection15_indexify(lte) : null
+		});
+	},
+	encodeValue(schemaVersion, collectionVersion, record) {
+		setVersion(schemaVersion);
+		const state = { start: 0, end: 2, buffer: null };
+		collection15_enc.preencode(state, record);
+		state.buffer = b4a.allocUnsafe(state.end);
+		state.buffer[state.start++] = 0;
+		state.buffer[state.start++] = collectionVersion;
+		collection15_enc.encode(state, record);
+		return state.buffer;
+	},
+	trigger: null,
+	reconstruct: collection15_reconstruct,
+	reconstructKey: collection15_reconstruct_key,
+	indexes: [],
+	decodedVersion: 0
+};
+
+// '@ghostdrive/comments' collection key
+const collection16_key = new IndexEncoder([IndexEncoder.STRING], { prefix: 16 });
+
+function collection16_indexify(record) {
+	const a = record.id;
+	return a === undefined ? [] : [a];
+}
+
+// '@ghostdrive/comments' value encoding
+const collection16_enc = getEncoding('@ghostdrive/comment/hyperdb#16');
+
+// '@ghostdrive/comments' reconstruction function
+function collection16_reconstruct(schemaVersion, keyBuf, valueBuf) {
+	const key = collection16_key.decode(keyBuf);
+	setVersion(schemaVersion);
+	const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf };
+	const type = c.uint.decode(state);
+	if (type !== 0) throw new Error('Unknown collection type: ' + type);
+	collection16.decodedVersion = c.uint.decode(state);
+	const record = collection16_enc.decode(state);
+	record.id = key[0];
+	return record;
+}
+// '@ghostdrive/comments' key reconstruction function
+function collection16_reconstruct_key(keyBuf) {
+	const key = collection16_key.decode(keyBuf);
+	return {
+		id: key[0]
+	};
+}
+
+// '@ghostdrive/comments'
+const collection16 = {
+	name: '@ghostdrive/comments',
+	id: 16,
+	version: 2,
+	encodeKey(record) {
+		const key = [record.id];
+		return collection16_key.encode(key);
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return collection16_key.encodeRange({
+			gt: gt ? collection16_indexify(gt) : null,
+			lt: lt ? collection16_indexify(lt) : null,
+			gte: gte ? collection16_indexify(gte) : null,
+			lte: lte ? collection16_indexify(lte) : null
+		});
+	},
+	encodeValue(schemaVersion, collectionVersion, record) {
+		setVersion(schemaVersion);
+		const state = { start: 0, end: 2, buffer: null };
+		collection16_enc.preencode(state, record);
+		state.buffer = b4a.allocUnsafe(state.end);
+		state.buffer[state.start++] = 0;
+		state.buffer[state.start++] = collectionVersion;
+		collection16_enc.encode(state, record);
+		return state.buffer;
+	},
+	trigger: null,
+	reconstruct: collection16_reconstruct,
+	reconstructKey: collection16_reconstruct_key,
+	indexes: [],
+	decodedVersion: 0
+};
+
+// '@ghostdrive/reviewComments' collection key
+const collection17_key = new IndexEncoder([IndexEncoder.STRING], { prefix: 17 });
+
+function collection17_indexify(record) {
+	const a = record.id;
+	return a === undefined ? [] : [a];
+}
+
+// '@ghostdrive/reviewComments' value encoding
+const collection17_enc = getEncoding('@ghostdrive/reviewComment/hyperdb#17');
+
+// '@ghostdrive/reviewComments' reconstruction function
+function collection17_reconstruct(schemaVersion, keyBuf, valueBuf) {
+	const key = collection17_key.decode(keyBuf);
+	setVersion(schemaVersion);
+	const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf };
+	const type = c.uint.decode(state);
+	if (type !== 0) throw new Error('Unknown collection type: ' + type);
+	collection17.decodedVersion = c.uint.decode(state);
+	const record = collection17_enc.decode(state);
+	record.id = key[0];
+	return record;
+}
+// '@ghostdrive/reviewComments' key reconstruction function
+function collection17_reconstruct_key(keyBuf) {
+	const key = collection17_key.decode(keyBuf);
+	return {
+		id: key[0]
+	};
+}
+
+// '@ghostdrive/reviewComments'
+const collection17 = {
+	name: '@ghostdrive/reviewComments',
+	id: 17,
+	version: 2,
+	encodeKey(record) {
+		const key = [record.id];
+		return collection17_key.encode(key);
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return collection17_key.encodeRange({
+			gt: gt ? collection17_indexify(gt) : null,
+			lt: lt ? collection17_indexify(lt) : null,
+			gte: gte ? collection17_indexify(gte) : null,
+			lte: lte ? collection17_indexify(lte) : null
+		});
+	},
+	encodeValue(schemaVersion, collectionVersion, record) {
+		setVersion(schemaVersion);
+		const state = { start: 0, end: 2, buffer: null };
+		collection17_enc.preencode(state, record);
+		state.buffer = b4a.allocUnsafe(state.end);
+		state.buffer[state.start++] = 0;
+		state.buffer[state.start++] = collectionVersion;
+		collection17_enc.encode(state, record);
+		return state.buffer;
+	},
+	trigger: null,
+	reconstruct: collection17_reconstruct,
+	reconstructKey: collection17_reconstruct_key,
+	indexes: [],
+	decodedVersion: 0
+};
+
+// '@ghostdrive/stars' collection key
+const collection18_key = new IndexEncoder([IndexEncoder.STRING, IndexEncoder.STRING], {
+	prefix: 18
+});
+
+function collection18_indexify(record) {
+	const arr = [];
+
+	const a0 = record.byKey;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.repoId;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	return arr;
+}
+
+// '@ghostdrive/stars' value encoding
+const collection18_enc = getEncoding('@ghostdrive/star/hyperdb#18');
+
+// '@ghostdrive/stars' reconstruction function
+function collection18_reconstruct(schemaVersion, keyBuf, valueBuf) {
+	const key = collection18_key.decode(keyBuf);
+	setVersion(schemaVersion);
+	const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf };
+	const type = c.uint.decode(state);
+	if (type !== 0) throw new Error('Unknown collection type: ' + type);
+	collection18.decodedVersion = c.uint.decode(state);
+	const record = collection18_enc.decode(state);
+	record.byKey = key[0];
+	record.repoId = key[1];
+	return record;
+}
+// '@ghostdrive/stars' key reconstruction function
+function collection18_reconstruct_key(keyBuf) {
+	const key = collection18_key.decode(keyBuf);
+	return {
+		byKey: key[0],
+		repoId: key[1]
+	};
+}
+
+// '@ghostdrive/stars'
+const collection18 = {
+	name: '@ghostdrive/stars',
+	id: 18,
+	version: 2,
+	encodeKey(record) {
+		const key = [record.byKey, record.repoId];
+		return collection18_key.encode(key);
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return collection18_key.encodeRange({
+			gt: gt ? collection18_indexify(gt) : null,
+			lt: lt ? collection18_indexify(lt) : null,
+			gte: gte ? collection18_indexify(gte) : null,
+			lte: lte ? collection18_indexify(lte) : null
+		});
+	},
+	encodeValue(schemaVersion, collectionVersion, record) {
+		setVersion(schemaVersion);
+		const state = { start: 0, end: 2, buffer: null };
+		collection18_enc.preencode(state, record);
+		state.buffer = b4a.allocUnsafe(state.end);
+		state.buffer[state.start++] = 0;
+		state.buffer[state.start++] = collectionVersion;
+		collection18_enc.encode(state, record);
+		return state.buffer;
+	},
+	trigger: null,
+	reconstruct: collection18_reconstruct,
+	reconstructKey: collection18_reconstruct_key,
+	indexes: [],
+	decodedVersion: 0
+};
+
+// '@ghostdrive/forks' collection key
+const collection19_key = new IndexEncoder([IndexEncoder.STRING, IndexEncoder.STRING], {
+	prefix: 19
+});
+
+function collection19_indexify(record) {
+	const arr = [];
+
+	const a0 = record.byKey;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.repoId;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	return arr;
+}
+
+// '@ghostdrive/forks' value encoding
+const collection19_enc = getEncoding('@ghostdrive/fork/hyperdb#19');
+
+// '@ghostdrive/forks' reconstruction function
+function collection19_reconstruct(schemaVersion, keyBuf, valueBuf) {
+	const key = collection19_key.decode(keyBuf);
+	setVersion(schemaVersion);
+	const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf };
+	const type = c.uint.decode(state);
+	if (type !== 0) throw new Error('Unknown collection type: ' + type);
+	collection19.decodedVersion = c.uint.decode(state);
+	const record = collection19_enc.decode(state);
+	record.byKey = key[0];
+	record.repoId = key[1];
+	return record;
+}
+// '@ghostdrive/forks' key reconstruction function
+function collection19_reconstruct_key(keyBuf) {
+	const key = collection19_key.decode(keyBuf);
+	return {
+		byKey: key[0],
+		repoId: key[1]
+	};
+}
+
+// '@ghostdrive/forks'
+const collection19 = {
+	name: '@ghostdrive/forks',
+	id: 19,
+	version: 2,
+	encodeKey(record) {
+		const key = [record.byKey, record.repoId];
+		return collection19_key.encode(key);
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return collection19_key.encodeRange({
+			gt: gt ? collection19_indexify(gt) : null,
+			lt: lt ? collection19_indexify(lt) : null,
+			gte: gte ? collection19_indexify(gte) : null,
+			lte: lte ? collection19_indexify(lte) : null
+		});
+	},
+	encodeValue(schemaVersion, collectionVersion, record) {
+		setVersion(schemaVersion);
+		const state = { start: 0, end: 2, buffer: null };
+		collection19_enc.preencode(state, record);
+		state.buffer = b4a.allocUnsafe(state.end);
+		state.buffer[state.start++] = 0;
+		state.buffer[state.start++] = collectionVersion;
+		collection19_enc.encode(state, record);
+		return state.buffer;
+	},
+	trigger: null,
+	reconstruct: collection19_reconstruct,
+	reconstructKey: collection19_reconstruct_key,
+	indexes: [],
+	decodedVersion: 0
+};
+
+// '@ghostdrive/watches' collection key
+const collection20_key = new IndexEncoder([IndexEncoder.STRING, IndexEncoder.STRING], {
+	prefix: 20
+});
+
+function collection20_indexify(record) {
+	const arr = [];
+
+	const a0 = record.byKey;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.repoId;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	return arr;
+}
+
+// '@ghostdrive/watches' value encoding
+const collection20_enc = getEncoding('@ghostdrive/watch/hyperdb#20');
+
+// '@ghostdrive/watches' reconstruction function
+function collection20_reconstruct(schemaVersion, keyBuf, valueBuf) {
+	const key = collection20_key.decode(keyBuf);
+	setVersion(schemaVersion);
+	const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf };
+	const type = c.uint.decode(state);
+	if (type !== 0) throw new Error('Unknown collection type: ' + type);
+	collection20.decodedVersion = c.uint.decode(state);
+	const record = collection20_enc.decode(state);
+	record.byKey = key[0];
+	record.repoId = key[1];
+	return record;
+}
+// '@ghostdrive/watches' key reconstruction function
+function collection20_reconstruct_key(keyBuf) {
+	const key = collection20_key.decode(keyBuf);
+	return {
+		byKey: key[0],
+		repoId: key[1]
+	};
+}
+
+// '@ghostdrive/watches'
+const collection20 = {
+	name: '@ghostdrive/watches',
+	id: 20,
+	version: 2,
+	encodeKey(record) {
+		const key = [record.byKey, record.repoId];
+		return collection20_key.encode(key);
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return collection20_key.encodeRange({
+			gt: gt ? collection20_indexify(gt) : null,
+			lt: lt ? collection20_indexify(lt) : null,
+			gte: gte ? collection20_indexify(gte) : null,
+			lte: lte ? collection20_indexify(lte) : null
+		});
+	},
+	encodeValue(schemaVersion, collectionVersion, record) {
+		setVersion(schemaVersion);
+		const state = { start: 0, end: 2, buffer: null };
+		collection20_enc.preencode(state, record);
+		state.buffer = b4a.allocUnsafe(state.end);
+		state.buffer[state.start++] = 0;
+		state.buffer[state.start++] = collectionVersion;
+		collection20_enc.encode(state, record);
+		return state.buffer;
+	},
+	trigger: null,
+	reconstruct: collection20_reconstruct,
+	reconstructKey: collection20_reconstruct_key,
+	indexes: [],
+	decodedVersion: 0
+};
+
+// '@ghostdrive/follows' collection key
+const collection21_key = new IndexEncoder([IndexEncoder.STRING, IndexEncoder.STRING], {
+	prefix: 21
+});
+
+function collection21_indexify(record) {
+	const arr = [];
+
+	const a0 = record.followerKey;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.targetKey;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	return arr;
+}
+
+// '@ghostdrive/follows' value encoding
+const collection21_enc = getEncoding('@ghostdrive/follow/hyperdb#21');
+
+// '@ghostdrive/follows' reconstruction function
+function collection21_reconstruct(schemaVersion, keyBuf, valueBuf) {
+	const key = collection21_key.decode(keyBuf);
+	setVersion(schemaVersion);
+	const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf };
+	const type = c.uint.decode(state);
+	if (type !== 0) throw new Error('Unknown collection type: ' + type);
+	collection21.decodedVersion = c.uint.decode(state);
+	const record = collection21_enc.decode(state);
+	record.followerKey = key[0];
+	record.targetKey = key[1];
+	return record;
+}
+// '@ghostdrive/follows' key reconstruction function
+function collection21_reconstruct_key(keyBuf) {
+	const key = collection21_key.decode(keyBuf);
+	return {
+		followerKey: key[0],
+		targetKey: key[1]
+	};
+}
+
+// '@ghostdrive/follows'
+const collection21 = {
+	name: '@ghostdrive/follows',
+	id: 21,
+	version: 2,
+	encodeKey(record) {
+		const key = [record.followerKey, record.targetKey];
+		return collection21_key.encode(key);
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return collection21_key.encodeRange({
+			gt: gt ? collection21_indexify(gt) : null,
+			lt: lt ? collection21_indexify(lt) : null,
+			gte: gte ? collection21_indexify(gte) : null,
+			lte: lte ? collection21_indexify(lte) : null
+		});
+	},
+	encodeValue(schemaVersion, collectionVersion, record) {
+		setVersion(schemaVersion);
+		const state = { start: 0, end: 2, buffer: null };
+		collection21_enc.preencode(state, record);
+		state.buffer = b4a.allocUnsafe(state.end);
+		state.buffer[state.start++] = 0;
+		state.buffer[state.start++] = collectionVersion;
+		collection21_enc.encode(state, record);
+		return state.buffer;
+	},
+	trigger: null,
+	reconstruct: collection21_reconstruct,
+	reconstructKey: collection21_reconstruct_key,
+	indexes: [],
+	decodedVersion: 0
+};
+
+// '@ghostdrive/activities' collection key
+const collection22_key = new IndexEncoder([IndexEncoder.STRING], { prefix: 22 });
+
+function collection22_indexify(record) {
+	const a = record.id;
+	return a === undefined ? [] : [a];
+}
+
+// '@ghostdrive/activities' value encoding
+const collection22_enc = getEncoding('@ghostdrive/activity/hyperdb#22');
+
+// '@ghostdrive/activities' reconstruction function
+function collection22_reconstruct(schemaVersion, keyBuf, valueBuf) {
+	const key = collection22_key.decode(keyBuf);
+	setVersion(schemaVersion);
+	const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf };
+	const type = c.uint.decode(state);
+	if (type !== 0) throw new Error('Unknown collection type: ' + type);
+	collection22.decodedVersion = c.uint.decode(state);
+	const record = collection22_enc.decode(state);
+	record.id = key[0];
+	return record;
+}
+// '@ghostdrive/activities' key reconstruction function
+function collection22_reconstruct_key(keyBuf) {
+	const key = collection22_key.decode(keyBuf);
+	return {
+		id: key[0]
+	};
+}
+
+// '@ghostdrive/activities'
+const collection22 = {
+	name: '@ghostdrive/activities',
+	id: 22,
+	version: 2,
+	encodeKey(record) {
+		const key = [record.id];
+		return collection22_key.encode(key);
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return collection22_key.encodeRange({
+			gt: gt ? collection22_indexify(gt) : null,
+			lt: lt ? collection22_indexify(lt) : null,
+			gte: gte ? collection22_indexify(gte) : null,
+			lte: lte ? collection22_indexify(lte) : null
+		});
+	},
+	encodeValue(schemaVersion, collectionVersion, record) {
+		setVersion(schemaVersion);
+		const state = { start: 0, end: 2, buffer: null };
+		collection22_enc.preencode(state, record);
+		state.buffer = b4a.allocUnsafe(state.end);
+		state.buffer[state.start++] = 0;
+		state.buffer[state.start++] = collectionVersion;
+		collection22_enc.encode(state, record);
+		return state.buffer;
+	},
+	trigger: null,
+	reconstruct: collection22_reconstruct,
+	reconstructKey: collection22_reconstruct_key,
+	indexes: [],
+	decodedVersion: 0
+};
+
+// '@ghostdrive/notifications' collection key
+const collection23_key = new IndexEncoder([IndexEncoder.STRING], { prefix: 23 });
+
+function collection23_indexify(record) {
+	const a = record.id;
+	return a === undefined ? [] : [a];
+}
+
+// '@ghostdrive/notifications' value encoding
+const collection23_enc = getEncoding('@ghostdrive/notification/hyperdb#23');
+
+// '@ghostdrive/notifications' reconstruction function
+function collection23_reconstruct(schemaVersion, keyBuf, valueBuf) {
+	const key = collection23_key.decode(keyBuf);
+	setVersion(schemaVersion);
+	const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf };
+	const type = c.uint.decode(state);
+	if (type !== 0) throw new Error('Unknown collection type: ' + type);
+	collection23.decodedVersion = c.uint.decode(state);
+	const record = collection23_enc.decode(state);
+	record.id = key[0];
+	return record;
+}
+// '@ghostdrive/notifications' key reconstruction function
+function collection23_reconstruct_key(keyBuf) {
+	const key = collection23_key.decode(keyBuf);
+	return {
+		id: key[0]
+	};
+}
+
+// '@ghostdrive/notifications'
+const collection23 = {
+	name: '@ghostdrive/notifications',
+	id: 23,
+	version: 2,
+	encodeKey(record) {
+		const key = [record.id];
+		return collection23_key.encode(key);
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return collection23_key.encodeRange({
+			gt: gt ? collection23_indexify(gt) : null,
+			lt: lt ? collection23_indexify(lt) : null,
+			gte: gte ? collection23_indexify(gte) : null,
+			lte: lte ? collection23_indexify(lte) : null
+		});
+	},
+	encodeValue(schemaVersion, collectionVersion, record) {
+		setVersion(schemaVersion);
+		const state = { start: 0, end: 2, buffer: null };
+		collection23_enc.preencode(state, record);
+		state.buffer = b4a.allocUnsafe(state.end);
+		state.buffer[state.start++] = 0;
+		state.buffer[state.start++] = collectionVersion;
+		collection23_enc.encode(state, record);
+		return state.buffer;
+	},
+	trigger: null,
+	reconstruct: collection23_reconstruct,
+	reconstructKey: collection23_reconstruct_key,
+	indexes: [],
+	decodedVersion: 0
+};
+
+// '@ghostdrive/threads' collection key
+const collection24_key = new IndexEncoder([IndexEncoder.STRING], { prefix: 24 });
+
+function collection24_indexify(record) {
+	const a = record.id;
+	return a === undefined ? [] : [a];
+}
+
+// '@ghostdrive/threads' value encoding
+const collection24_enc = getEncoding('@ghostdrive/thread/hyperdb#24');
+
+// '@ghostdrive/threads' reconstruction function
+function collection24_reconstruct(schemaVersion, keyBuf, valueBuf) {
+	const key = collection24_key.decode(keyBuf);
+	setVersion(schemaVersion);
+	const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf };
+	const type = c.uint.decode(state);
+	if (type !== 0) throw new Error('Unknown collection type: ' + type);
+	collection24.decodedVersion = c.uint.decode(state);
+	const record = collection24_enc.decode(state);
+	record.id = key[0];
+	return record;
+}
+// '@ghostdrive/threads' key reconstruction function
+function collection24_reconstruct_key(keyBuf) {
+	const key = collection24_key.decode(keyBuf);
+	return {
+		id: key[0]
+	};
+}
+
+// '@ghostdrive/threads'
+const collection24 = {
+	name: '@ghostdrive/threads',
+	id: 24,
+	version: 2,
+	encodeKey(record) {
+		const key = [record.id];
+		return collection24_key.encode(key);
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return collection24_key.encodeRange({
+			gt: gt ? collection24_indexify(gt) : null,
+			lt: lt ? collection24_indexify(lt) : null,
+			gte: gte ? collection24_indexify(gte) : null,
+			lte: lte ? collection24_indexify(lte) : null
+		});
+	},
+	encodeValue(schemaVersion, collectionVersion, record) {
+		setVersion(schemaVersion);
+		const state = { start: 0, end: 2, buffer: null };
+		collection24_enc.preencode(state, record);
+		state.buffer = b4a.allocUnsafe(state.end);
+		state.buffer[state.start++] = 0;
+		state.buffer[state.start++] = collectionVersion;
+		collection24_enc.encode(state, record);
+		return state.buffer;
+	},
+	trigger: null,
+	reconstruct: collection24_reconstruct,
+	reconstructKey: collection24_reconstruct_key,
+	indexes: [],
+	decodedVersion: 0
+};
+
+// '@ghostdrive/posts' collection key
+const collection25_key = new IndexEncoder([IndexEncoder.STRING], { prefix: 25 });
+
+function collection25_indexify(record) {
+	const a = record.id;
+	return a === undefined ? [] : [a];
+}
+
+// '@ghostdrive/posts' value encoding
+const collection25_enc = getEncoding('@ghostdrive/post/hyperdb#25');
+
+// '@ghostdrive/posts' reconstruction function
+function collection25_reconstruct(schemaVersion, keyBuf, valueBuf) {
+	const key = collection25_key.decode(keyBuf);
+	setVersion(schemaVersion);
+	const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf };
+	const type = c.uint.decode(state);
+	if (type !== 0) throw new Error('Unknown collection type: ' + type);
+	collection25.decodedVersion = c.uint.decode(state);
+	const record = collection25_enc.decode(state);
+	record.id = key[0];
+	return record;
+}
+// '@ghostdrive/posts' key reconstruction function
+function collection25_reconstruct_key(keyBuf) {
+	const key = collection25_key.decode(keyBuf);
+	return {
+		id: key[0]
+	};
+}
+
+// '@ghostdrive/posts'
+const collection25 = {
+	name: '@ghostdrive/posts',
+	id: 25,
+	version: 2,
+	encodeKey(record) {
+		const key = [record.id];
+		return collection25_key.encode(key);
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return collection25_key.encodeRange({
+			gt: gt ? collection25_indexify(gt) : null,
+			lt: lt ? collection25_indexify(lt) : null,
+			gte: gte ? collection25_indexify(gte) : null,
+			lte: lte ? collection25_indexify(lte) : null
+		});
+	},
+	encodeValue(schemaVersion, collectionVersion, record) {
+		setVersion(schemaVersion);
+		const state = { start: 0, end: 2, buffer: null };
+		collection25_enc.preencode(state, record);
+		state.buffer = b4a.allocUnsafe(state.end);
+		state.buffer[state.start++] = 0;
+		state.buffer[state.start++] = collectionVersion;
+		collection25_enc.encode(state, record);
+		return state.buffer;
+	},
+	trigger: null,
+	reconstruct: collection25_reconstruct,
+	reconstructKey: collection25_reconstruct_key,
+	indexes: [],
+	decodedVersion: 0
+};
+
+// '@ghostdrive/wikiPages' collection key
+const collection26_key = new IndexEncoder([IndexEncoder.STRING, IndexEncoder.STRING], {
+	prefix: 26
+});
+
+function collection26_indexify(record) {
+	const arr = [];
+
+	const a0 = record.repoId;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.name;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	return arr;
+}
+
+// '@ghostdrive/wikiPages' value encoding
+const collection26_enc = getEncoding('@ghostdrive/wikiPage/hyperdb#26');
+
+// '@ghostdrive/wikiPages' reconstruction function
+function collection26_reconstruct(schemaVersion, keyBuf, valueBuf) {
+	const key = collection26_key.decode(keyBuf);
+	setVersion(schemaVersion);
+	const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf };
+	const type = c.uint.decode(state);
+	if (type !== 0) throw new Error('Unknown collection type: ' + type);
+	collection26.decodedVersion = c.uint.decode(state);
+	const record = collection26_enc.decode(state);
+	record.repoId = key[0];
+	record.name = key[1];
+	return record;
+}
+// '@ghostdrive/wikiPages' key reconstruction function
+function collection26_reconstruct_key(keyBuf) {
+	const key = collection26_key.decode(keyBuf);
+	return {
+		repoId: key[0],
+		name: key[1]
+	};
+}
+
+// '@ghostdrive/wikiPages'
+const collection26 = {
+	name: '@ghostdrive/wikiPages',
+	id: 26,
+	version: 2,
+	encodeKey(record) {
+		const key = [record.repoId, record.name];
+		return collection26_key.encode(key);
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return collection26_key.encodeRange({
+			gt: gt ? collection26_indexify(gt) : null,
+			lt: lt ? collection26_indexify(lt) : null,
+			gte: gte ? collection26_indexify(gte) : null,
+			lte: lte ? collection26_indexify(lte) : null
+		});
+	},
+	encodeValue(schemaVersion, collectionVersion, record) {
+		setVersion(schemaVersion);
+		const state = { start: 0, end: 2, buffer: null };
+		collection26_enc.preencode(state, record);
+		state.buffer = b4a.allocUnsafe(state.end);
+		state.buffer[state.start++] = 0;
+		state.buffer[state.start++] = collectionVersion;
+		collection26_enc.encode(state, record);
+		return state.buffer;
+	},
+	trigger: null,
+	reconstruct: collection26_reconstruct,
+	reconstructKey: collection26_reconstruct_key,
+	indexes: [],
+	decodedVersion: 0
+};
+
+// '@ghostdrive/webhooks' collection key
+const collection27_key = new IndexEncoder([IndexEncoder.STRING, IndexEncoder.STRING], {
+	prefix: 27
+});
+
+function collection27_indexify(record) {
+	const arr = [];
+
+	const a0 = record.repoId;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.id;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	return arr;
+}
+
+// '@ghostdrive/webhooks' value encoding
+const collection27_enc = getEncoding('@ghostdrive/webhook/hyperdb#27');
+
+// '@ghostdrive/webhooks' reconstruction function
+function collection27_reconstruct(schemaVersion, keyBuf, valueBuf) {
+	const key = collection27_key.decode(keyBuf);
+	setVersion(schemaVersion);
+	const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf };
+	const type = c.uint.decode(state);
+	if (type !== 0) throw new Error('Unknown collection type: ' + type);
+	collection27.decodedVersion = c.uint.decode(state);
+	const record = collection27_enc.decode(state);
+	record.repoId = key[0];
+	record.id = key[1];
+	return record;
+}
+// '@ghostdrive/webhooks' key reconstruction function
+function collection27_reconstruct_key(keyBuf) {
+	const key = collection27_key.decode(keyBuf);
+	return {
+		repoId: key[0],
+		id: key[1]
+	};
+}
+
+// '@ghostdrive/webhooks'
+const collection27 = {
+	name: '@ghostdrive/webhooks',
+	id: 27,
+	version: 2,
+	encodeKey(record) {
+		const key = [record.repoId, record.id];
+		return collection27_key.encode(key);
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return collection27_key.encodeRange({
+			gt: gt ? collection27_indexify(gt) : null,
+			lt: lt ? collection27_indexify(lt) : null,
+			gte: gte ? collection27_indexify(gte) : null,
+			lte: lte ? collection27_indexify(lte) : null
+		});
+	},
+	encodeValue(schemaVersion, collectionVersion, record) {
+		setVersion(schemaVersion);
+		const state = { start: 0, end: 2, buffer: null };
+		collection27_enc.preencode(state, record);
+		state.buffer = b4a.allocUnsafe(state.end);
+		state.buffer[state.start++] = 0;
+		state.buffer[state.start++] = collectionVersion;
+		collection27_enc.encode(state, record);
+		return state.buffer;
+	},
+	trigger: null,
+	reconstruct: collection27_reconstruct,
+	reconstructKey: collection27_reconstruct_key,
+	indexes: [],
+	decodedVersion: 0
+};
+
+// '@ghostdrive/users-by-handle' collection key
+const index28_key = new IndexEncoder([IndexEncoder.STRING, IndexEncoder.STRING], { prefix: 28 });
+
+function index28_indexify(record) {
+	const arr = [];
+
+	const a0 = record.handle;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.peerKey;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	return arr;
+}
+
+// '@ghostdrive/users-by-handle'
+const index28 = {
+	name: '@ghostdrive/users-by-handle',
+	version: 2,
+	id: 28,
+	encodeKey(record) {
+		return index28_key.encode(index28_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index28_key.encodeRange({
+			gt: gt ? index28_indexify(gt) : null,
+			lt: lt ? index28_indexify(lt) : null,
+			gte: gte ? index28_indexify(gte) : null,
+			lte: lte ? index28_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index28.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index28_key.encode([record.handle, record.peerKey])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection7.indexes.length,
+	collection: collection7
+};
+collection7.indexes.push(index28);
+
+// '@ghostdrive/repos-by-owner' collection key
+const index29_key = new IndexEncoder([IndexEncoder.STRING, IndexEncoder.STRING], { prefix: 29 });
+
+function index29_indexify(record) {
+	const arr = [];
+
+	const a0 = record.ownerKey;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.id;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	return arr;
+}
+
+// '@ghostdrive/repos-by-owner'
+const index29 = {
+	name: '@ghostdrive/repos-by-owner',
+	version: 2,
+	id: 29,
+	encodeKey(record) {
+		return index29_key.encode(index29_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index29_key.encodeRange({
+			gt: gt ? index29_indexify(gt) : null,
+			lt: lt ? index29_indexify(lt) : null,
+			gte: gte ? index29_indexify(gte) : null,
+			lte: lte ? index29_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index29.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index29_key.encode([record.ownerKey, record.id])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection8.indexes.length,
+	collection: collection8
+};
+collection8.indexes.push(index29);
+
+// '@ghostdrive/refs-by-repo' collection key
+const index30_key = new IndexEncoder(
+	[IndexEncoder.STRING, IndexEncoder.STRING, IndexEncoder.STRING],
+	{ prefix: 30 }
+);
+
+function index30_indexify(record) {
+	const arr = [];
+
+	const a0 = record.repoId;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.repoId;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	const a2 = record.name;
+	if (a2 === undefined) return arr;
+	arr.push(a2);
+
+	return arr;
+}
+
+// '@ghostdrive/refs-by-repo'
+const index30 = {
+	name: '@ghostdrive/refs-by-repo',
+	version: 2,
+	id: 30,
+	encodeKey(record) {
+		return index30_key.encode(index30_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index30_key.encodeRange({
+			gt: gt ? index30_indexify(gt) : null,
+			lt: lt ? index30_indexify(lt) : null,
+			gte: gte ? index30_indexify(gte) : null,
+			lte: lte ? index30_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index30.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index30_key.encode([record.repoId, record.repoId, record.name])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection9.indexes.length,
+	collection: collection9
+};
+collection9.indexes.push(index30);
+
+// '@ghostdrive/commits-by-repo' collection key
+const index31_key = new IndexEncoder(
+	[IndexEncoder.STRING, IndexEncoder.STRING, IndexEncoder.STRING],
+	{ prefix: 31 }
+);
+
+function index31_indexify(record) {
+	const arr = [];
+
+	const a0 = record.repoId;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.repoId;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	const a2 = record.sha;
+	if (a2 === undefined) return arr;
+	arr.push(a2);
+
+	return arr;
+}
+
+// '@ghostdrive/commits-by-repo'
+const index31 = {
+	name: '@ghostdrive/commits-by-repo',
+	version: 2,
+	id: 31,
+	encodeKey(record) {
+		return index31_key.encode(index31_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index31_key.encodeRange({
+			gt: gt ? index31_indexify(gt) : null,
+			lt: lt ? index31_indexify(lt) : null,
+			gte: gte ? index31_indexify(gte) : null,
+			lte: lte ? index31_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index31.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index31_key.encode([record.repoId, record.repoId, record.sha])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection10.indexes.length,
+	collection: collection10
+};
+collection10.indexes.push(index31);
+
+// '@ghostdrive/issues-by-repo' collection key
+const index32_key = new IndexEncoder(
+	[IndexEncoder.STRING, IndexEncoder.STRING, IndexEncoder.UINT],
+	{ prefix: 32 }
+);
+
+function index32_indexify(record) {
+	const arr = [];
+
+	const a0 = record.repoId;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.repoId;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	const a2 = record.number;
+	if (a2 === undefined) return arr;
+	arr.push(a2);
+
+	return arr;
+}
+
+// '@ghostdrive/issues-by-repo'
+const index32 = {
+	name: '@ghostdrive/issues-by-repo',
+	version: 2,
+	id: 32,
+	encodeKey(record) {
+		return index32_key.encode(index32_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index32_key.encodeRange({
+			gt: gt ? index32_indexify(gt) : null,
+			lt: lt ? index32_indexify(lt) : null,
+			gte: gte ? index32_indexify(gte) : null,
+			lte: lte ? index32_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index32.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index32_key.encode([record.repoId, record.repoId, record.number])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection11.indexes.length,
+	collection: collection11
+};
+collection11.indexes.push(index32);
+
+// '@ghostdrive/labels-by-repo' collection key
+const index33_key = new IndexEncoder(
+	[IndexEncoder.STRING, IndexEncoder.STRING, IndexEncoder.STRING],
+	{ prefix: 33 }
+);
+
+function index33_indexify(record) {
+	const arr = [];
+
+	const a0 = record.repoId;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.repoId;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	const a2 = record.id;
+	if (a2 === undefined) return arr;
+	arr.push(a2);
+
+	return arr;
+}
+
+// '@ghostdrive/labels-by-repo'
+const index33 = {
+	name: '@ghostdrive/labels-by-repo',
+	version: 2,
+	id: 33,
+	encodeKey(record) {
+		return index33_key.encode(index33_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index33_key.encodeRange({
+			gt: gt ? index33_indexify(gt) : null,
+			lt: lt ? index33_indexify(lt) : null,
+			gte: gte ? index33_indexify(gte) : null,
+			lte: lte ? index33_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index33.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index33_key.encode([record.repoId, record.repoId, record.id])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection12.indexes.length,
+	collection: collection12
+};
+collection12.indexes.push(index33);
+
+// '@ghostdrive/milestones-by-repo' collection key
+const index34_key = new IndexEncoder(
+	[IndexEncoder.STRING, IndexEncoder.STRING, IndexEncoder.STRING],
+	{ prefix: 34 }
+);
+
+function index34_indexify(record) {
+	const arr = [];
+
+	const a0 = record.repoId;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.repoId;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	const a2 = record.id;
+	if (a2 === undefined) return arr;
+	arr.push(a2);
+
+	return arr;
+}
+
+// '@ghostdrive/milestones-by-repo'
+const index34 = {
+	name: '@ghostdrive/milestones-by-repo',
+	version: 2,
+	id: 34,
+	encodeKey(record) {
+		return index34_key.encode(index34_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index34_key.encodeRange({
+			gt: gt ? index34_indexify(gt) : null,
+			lt: lt ? index34_indexify(lt) : null,
+			gte: gte ? index34_indexify(gte) : null,
+			lte: lte ? index34_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index34.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index34_key.encode([record.repoId, record.repoId, record.id])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection13.indexes.length,
+	collection: collection13
+};
+collection13.indexes.push(index34);
+
+// '@ghostdrive/pulls-by-repo' collection key
+const index35_key = new IndexEncoder(
+	[IndexEncoder.STRING, IndexEncoder.STRING, IndexEncoder.UINT],
+	{ prefix: 35 }
+);
+
+function index35_indexify(record) {
+	const arr = [];
+
+	const a0 = record.repoId;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.repoId;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	const a2 = record.number;
+	if (a2 === undefined) return arr;
+	arr.push(a2);
+
+	return arr;
+}
+
+// '@ghostdrive/pulls-by-repo'
+const index35 = {
+	name: '@ghostdrive/pulls-by-repo',
+	version: 2,
+	id: 35,
+	encodeKey(record) {
+		return index35_key.encode(index35_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index35_key.encodeRange({
+			gt: gt ? index35_indexify(gt) : null,
+			lt: lt ? index35_indexify(lt) : null,
+			gte: gte ? index35_indexify(gte) : null,
+			lte: lte ? index35_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index35.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index35_key.encode([record.repoId, record.repoId, record.number])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection14.indexes.length,
+	collection: collection14
+};
+collection14.indexes.push(index35);
+
+// '@ghostdrive/reviews-by-pull' collection key
+const index36_key = new IndexEncoder([IndexEncoder.STRING, IndexEncoder.STRING], { prefix: 36 });
+
+function index36_indexify(record) {
+	const arr = [];
+
+	const a0 = record.pullId;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.id;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	return arr;
+}
+
+// '@ghostdrive/reviews-by-pull'
+const index36 = {
+	name: '@ghostdrive/reviews-by-pull',
+	version: 2,
+	id: 36,
+	encodeKey(record) {
+		return index36_key.encode(index36_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index36_key.encodeRange({
+			gt: gt ? index36_indexify(gt) : null,
+			lt: lt ? index36_indexify(lt) : null,
+			gte: gte ? index36_indexify(gte) : null,
+			lte: lte ? index36_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index36.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index36_key.encode([record.pullId, record.id])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection15.indexes.length,
+	collection: collection15
+};
+collection15.indexes.push(index36);
+
+// '@ghostdrive/comments-by-parent' collection key
+const index37_key = new IndexEncoder(
+	[IndexEncoder.STRING, IndexEncoder.STRING, IndexEncoder.STRING],
+	{ prefix: 37 }
+);
+
+function index37_indexify(record) {
+	const arr = [];
+
+	const a0 = record.kind;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.parentId;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	const a2 = record.id;
+	if (a2 === undefined) return arr;
+	arr.push(a2);
+
+	return arr;
+}
+
+// '@ghostdrive/comments-by-parent'
+const index37 = {
+	name: '@ghostdrive/comments-by-parent',
+	version: 2,
+	id: 37,
+	encodeKey(record) {
+		return index37_key.encode(index37_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index37_key.encodeRange({
+			gt: gt ? index37_indexify(gt) : null,
+			lt: lt ? index37_indexify(lt) : null,
+			gte: gte ? index37_indexify(gte) : null,
+			lte: lte ? index37_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index37.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index37_key.encode([record.kind, record.parentId, record.id])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection16.indexes.length,
+	collection: collection16
+};
+collection16.indexes.push(index37);
+
+// '@ghostdrive/reviewComments-by-pull' collection key
+const index38_key = new IndexEncoder([IndexEncoder.STRING, IndexEncoder.STRING], { prefix: 38 });
+
+function index38_indexify(record) {
+	const arr = [];
+
+	const a0 = record.pullId;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.id;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	return arr;
+}
+
+// '@ghostdrive/reviewComments-by-pull'
+const index38 = {
+	name: '@ghostdrive/reviewComments-by-pull',
+	version: 2,
+	id: 38,
+	encodeKey(record) {
+		return index38_key.encode(index38_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index38_key.encodeRange({
+			gt: gt ? index38_indexify(gt) : null,
+			lt: lt ? index38_indexify(lt) : null,
+			gte: gte ? index38_indexify(gte) : null,
+			lte: lte ? index38_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index38.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index38_key.encode([record.pullId, record.id])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection17.indexes.length,
+	collection: collection17
+};
+collection17.indexes.push(index38);
+
+// '@ghostdrive/star-by-repo' collection key
+const index39_key = new IndexEncoder(
+	[IndexEncoder.STRING, IndexEncoder.STRING, IndexEncoder.STRING],
+	{ prefix: 39 }
+);
+
+function index39_indexify(record) {
+	const arr = [];
+
+	const a0 = record.repoId;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.byKey;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	const a2 = record.repoId;
+	if (a2 === undefined) return arr;
+	arr.push(a2);
+
+	return arr;
+}
+
+// '@ghostdrive/star-by-repo'
+const index39 = {
+	name: '@ghostdrive/star-by-repo',
+	version: 2,
+	id: 39,
+	encodeKey(record) {
+		return index39_key.encode(index39_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index39_key.encodeRange({
+			gt: gt ? index39_indexify(gt) : null,
+			lt: lt ? index39_indexify(lt) : null,
+			gte: gte ? index39_indexify(gte) : null,
+			lte: lte ? index39_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index39.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index39_key.encode([record.repoId, record.byKey, record.repoId])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection18.indexes.length,
+	collection: collection18
+};
+collection18.indexes.push(index39);
+
+// '@ghostdrive/star-by-user' collection key
+const index40_key = new IndexEncoder(
+	[IndexEncoder.STRING, IndexEncoder.STRING, IndexEncoder.STRING],
+	{ prefix: 40 }
+);
+
+function index40_indexify(record) {
+	const arr = [];
+
+	const a0 = record.byKey;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.byKey;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	const a2 = record.repoId;
+	if (a2 === undefined) return arr;
+	arr.push(a2);
+
+	return arr;
+}
+
+// '@ghostdrive/star-by-user'
+const index40 = {
+	name: '@ghostdrive/star-by-user',
+	version: 2,
+	id: 40,
+	encodeKey(record) {
+		return index40_key.encode(index40_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index40_key.encodeRange({
+			gt: gt ? index40_indexify(gt) : null,
+			lt: lt ? index40_indexify(lt) : null,
+			gte: gte ? index40_indexify(gte) : null,
+			lte: lte ? index40_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index40.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index40_key.encode([record.byKey, record.byKey, record.repoId])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection18.indexes.length,
+	collection: collection18
+};
+collection18.indexes.push(index40);
+
+// '@ghostdrive/fork-by-repo' collection key
+const index41_key = new IndexEncoder(
+	[IndexEncoder.STRING, IndexEncoder.STRING, IndexEncoder.STRING],
+	{ prefix: 41 }
+);
+
+function index41_indexify(record) {
+	const arr = [];
+
+	const a0 = record.repoId;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.byKey;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	const a2 = record.repoId;
+	if (a2 === undefined) return arr;
+	arr.push(a2);
+
+	return arr;
+}
+
+// '@ghostdrive/fork-by-repo'
+const index41 = {
+	name: '@ghostdrive/fork-by-repo',
+	version: 2,
+	id: 41,
+	encodeKey(record) {
+		return index41_key.encode(index41_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index41_key.encodeRange({
+			gt: gt ? index41_indexify(gt) : null,
+			lt: lt ? index41_indexify(lt) : null,
+			gte: gte ? index41_indexify(gte) : null,
+			lte: lte ? index41_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index41.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index41_key.encode([record.repoId, record.byKey, record.repoId])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection19.indexes.length,
+	collection: collection19
+};
+collection19.indexes.push(index41);
+
+// '@ghostdrive/fork-by-user' collection key
+const index42_key = new IndexEncoder(
+	[IndexEncoder.STRING, IndexEncoder.STRING, IndexEncoder.STRING],
+	{ prefix: 42 }
+);
+
+function index42_indexify(record) {
+	const arr = [];
+
+	const a0 = record.byKey;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.byKey;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	const a2 = record.repoId;
+	if (a2 === undefined) return arr;
+	arr.push(a2);
+
+	return arr;
+}
+
+// '@ghostdrive/fork-by-user'
+const index42 = {
+	name: '@ghostdrive/fork-by-user',
+	version: 2,
+	id: 42,
+	encodeKey(record) {
+		return index42_key.encode(index42_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index42_key.encodeRange({
+			gt: gt ? index42_indexify(gt) : null,
+			lt: lt ? index42_indexify(lt) : null,
+			gte: gte ? index42_indexify(gte) : null,
+			lte: lte ? index42_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index42.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index42_key.encode([record.byKey, record.byKey, record.repoId])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection19.indexes.length,
+	collection: collection19
+};
+collection19.indexes.push(index42);
+
+// '@ghostdrive/watch-by-repo' collection key
+const index43_key = new IndexEncoder(
+	[IndexEncoder.STRING, IndexEncoder.STRING, IndexEncoder.STRING],
+	{ prefix: 43 }
+);
+
+function index43_indexify(record) {
+	const arr = [];
+
+	const a0 = record.repoId;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.byKey;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	const a2 = record.repoId;
+	if (a2 === undefined) return arr;
+	arr.push(a2);
+
+	return arr;
+}
+
+// '@ghostdrive/watch-by-repo'
+const index43 = {
+	name: '@ghostdrive/watch-by-repo',
+	version: 2,
+	id: 43,
+	encodeKey(record) {
+		return index43_key.encode(index43_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index43_key.encodeRange({
+			gt: gt ? index43_indexify(gt) : null,
+			lt: lt ? index43_indexify(lt) : null,
+			gte: gte ? index43_indexify(gte) : null,
+			lte: lte ? index43_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index43.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index43_key.encode([record.repoId, record.byKey, record.repoId])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection20.indexes.length,
+	collection: collection20
+};
+collection20.indexes.push(index43);
+
+// '@ghostdrive/follow-by-target' collection key
+const index44_key = new IndexEncoder(
+	[IndexEncoder.STRING, IndexEncoder.STRING, IndexEncoder.STRING],
+	{ prefix: 44 }
+);
+
+function index44_indexify(record) {
+	const arr = [];
+
+	const a0 = record.targetKey;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.followerKey;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	const a2 = record.targetKey;
+	if (a2 === undefined) return arr;
+	arr.push(a2);
+
+	return arr;
+}
+
+// '@ghostdrive/follow-by-target'
+const index44 = {
+	name: '@ghostdrive/follow-by-target',
+	version: 2,
+	id: 44,
+	encodeKey(record) {
+		return index44_key.encode(index44_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index44_key.encodeRange({
+			gt: gt ? index44_indexify(gt) : null,
+			lt: lt ? index44_indexify(lt) : null,
+			gte: gte ? index44_indexify(gte) : null,
+			lte: lte ? index44_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index44.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index44_key.encode([record.targetKey, record.followerKey, record.targetKey])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection21.indexes.length,
+	collection: collection21
+};
+collection21.indexes.push(index44);
+
+// '@ghostdrive/activity-by-actor' collection key
+const index45_key = new IndexEncoder([IndexEncoder.STRING, IndexEncoder.STRING], { prefix: 45 });
+
+function index45_indexify(record) {
+	const arr = [];
+
+	const a0 = record.actorKey;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.id;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	return arr;
+}
+
+// '@ghostdrive/activity-by-actor'
+const index45 = {
+	name: '@ghostdrive/activity-by-actor',
+	version: 2,
+	id: 45,
+	encodeKey(record) {
+		return index45_key.encode(index45_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index45_key.encodeRange({
+			gt: gt ? index45_indexify(gt) : null,
+			lt: lt ? index45_indexify(lt) : null,
+			gte: gte ? index45_indexify(gte) : null,
+			lte: lte ? index45_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index45.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index45_key.encode([record.actorKey, record.id])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection22.indexes.length,
+	collection: collection22
+};
+collection22.indexes.push(index45);
+
+// '@ghostdrive/activity-by-repo' collection key
+const index46_key = new IndexEncoder([IndexEncoder.STRING, IndexEncoder.STRING], { prefix: 46 });
+
+function index46_indexify(record) {
+	const arr = [];
+
+	const a0 = record.repoId;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.id;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	return arr;
+}
+
+// '@ghostdrive/activity-by-repo'
+const index46 = {
+	name: '@ghostdrive/activity-by-repo',
+	version: 2,
+	id: 46,
+	encodeKey(record) {
+		return index46_key.encode(index46_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index46_key.encodeRange({
+			gt: gt ? index46_indexify(gt) : null,
+			lt: lt ? index46_indexify(lt) : null,
+			gte: gte ? index46_indexify(gte) : null,
+			lte: lte ? index46_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index46.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index46_key.encode([record.repoId, record.id])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection22.indexes.length,
+	collection: collection22
+};
+collection22.indexes.push(index46);
+
+// '@ghostdrive/notification-by-to' collection key
+const index47_key = new IndexEncoder([IndexEncoder.STRING, IndexEncoder.STRING], { prefix: 47 });
+
+function index47_indexify(record) {
+	const arr = [];
+
+	const a0 = record.toKey;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.id;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	return arr;
+}
+
+// '@ghostdrive/notification-by-to'
+const index47 = {
+	name: '@ghostdrive/notification-by-to',
+	version: 2,
+	id: 47,
+	encodeKey(record) {
+		return index47_key.encode(index47_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index47_key.encodeRange({
+			gt: gt ? index47_indexify(gt) : null,
+			lt: lt ? index47_indexify(lt) : null,
+			gte: gte ? index47_indexify(gte) : null,
+			lte: lte ? index47_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index47.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index47_key.encode([record.toKey, record.id])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection23.indexes.length,
+	collection: collection23
+};
+collection23.indexes.push(index47);
+
+// '@ghostdrive/threads-by-repo' collection key
+const index48_key = new IndexEncoder([IndexEncoder.STRING, IndexEncoder.STRING], { prefix: 48 });
+
+function index48_indexify(record) {
+	const arr = [];
+
+	const a0 = record.repoId;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.id;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	return arr;
+}
+
+// '@ghostdrive/threads-by-repo'
+const index48 = {
+	name: '@ghostdrive/threads-by-repo',
+	version: 2,
+	id: 48,
+	encodeKey(record) {
+		return index48_key.encode(index48_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index48_key.encodeRange({
+			gt: gt ? index48_indexify(gt) : null,
+			lt: lt ? index48_indexify(lt) : null,
+			gte: gte ? index48_indexify(gte) : null,
+			lte: lte ? index48_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index48.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index48_key.encode([record.repoId, record.id])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection24.indexes.length,
+	collection: collection24
+};
+collection24.indexes.push(index48);
+
+// '@ghostdrive/posts-by-thread' collection key
+const index49_key = new IndexEncoder([IndexEncoder.STRING, IndexEncoder.STRING], { prefix: 49 });
+
+function index49_indexify(record) {
+	const arr = [];
+
+	const a0 = record.threadId;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.id;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	return arr;
+}
+
+// '@ghostdrive/posts-by-thread'
+const index49 = {
+	name: '@ghostdrive/posts-by-thread',
+	version: 2,
+	id: 49,
+	encodeKey(record) {
+		return index49_key.encode(index49_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index49_key.encodeRange({
+			gt: gt ? index49_indexify(gt) : null,
+			lt: lt ? index49_indexify(lt) : null,
+			gte: gte ? index49_indexify(gte) : null,
+			lte: lte ? index49_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index49.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index49_key.encode([record.threadId, record.id])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection25.indexes.length,
+	collection: collection25
+};
+collection25.indexes.push(index49);
+
+// '@ghostdrive/announcements' collection key
+const collection50_key = new IndexEncoder([IndexEncoder.STRING, IndexEncoder.STRING], {
+	prefix: 50
+});
+
+function collection50_indexify(record) {
+	const arr = [];
+
+	const a0 = record.peerKey;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.repoId;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	return arr;
+}
+
+// '@ghostdrive/announcements' value encoding
+const collection50_enc = getEncoding('@ghostdrive/announcement/hyperdb#50');
+
+// '@ghostdrive/announcements' reconstruction function
+function collection50_reconstruct(schemaVersion, keyBuf, valueBuf) {
+	const key = collection50_key.decode(keyBuf);
+	setVersion(schemaVersion);
+	const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf };
+	const type = c.uint.decode(state);
+	if (type !== 0) throw new Error('Unknown collection type: ' + type);
+	collection50.decodedVersion = c.uint.decode(state);
+	const record = collection50_enc.decode(state);
+	record.peerKey = key[0];
+	record.repoId = key[1];
+	return record;
+}
+// '@ghostdrive/announcements' key reconstruction function
+function collection50_reconstruct_key(keyBuf) {
+	const key = collection50_key.decode(keyBuf);
+	return {
+		peerKey: key[0],
+		repoId: key[1]
+	};
+}
+
+// '@ghostdrive/announcements'
+const collection50 = {
+	name: '@ghostdrive/announcements',
+	id: 50,
+	version: 3,
+	encodeKey(record) {
+		const key = [record.peerKey, record.repoId];
+		return collection50_key.encode(key);
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return collection50_key.encodeRange({
+			gt: gt ? collection50_indexify(gt) : null,
+			lt: lt ? collection50_indexify(lt) : null,
+			gte: gte ? collection50_indexify(gte) : null,
+			lte: lte ? collection50_indexify(lte) : null
+		});
+	},
+	encodeValue(schemaVersion, collectionVersion, record) {
+		setVersion(schemaVersion);
+		const state = { start: 0, end: 2, buffer: null };
+		collection50_enc.preencode(state, record);
+		state.buffer = b4a.allocUnsafe(state.end);
+		state.buffer[state.start++] = 0;
+		state.buffer[state.start++] = collectionVersion;
+		collection50_enc.encode(state, record);
+		return state.buffer;
+	},
+	trigger: null,
+	reconstruct: collection50_reconstruct,
+	reconstructKey: collection50_reconstruct_key,
+	indexes: [],
+	decodedVersion: 0
+};
+
+// '@ghostdrive/announcement-by-peer' collection key
+const index51_key = new IndexEncoder(
+	[IndexEncoder.STRING, IndexEncoder.STRING, IndexEncoder.STRING],
+	{ prefix: 51 }
+);
+
+function index51_indexify(record) {
+	const arr = [];
+
+	const a0 = record.peerKey;
+	if (a0 === undefined) return arr;
+	arr.push(a0);
+
+	const a1 = record.peerKey;
+	if (a1 === undefined) return arr;
+	arr.push(a1);
+
+	const a2 = record.repoId;
+	if (a2 === undefined) return arr;
+	arr.push(a2);
+
+	return arr;
+}
+
+// '@ghostdrive/announcement-by-peer'
+const index51 = {
+	name: '@ghostdrive/announcement-by-peer',
+	version: 3,
+	id: 51,
+	encodeKey(record) {
+		return index51_key.encode(index51_indexify(record));
+	},
+	encodeKeyRange({ gt, lt, gte, lte } = {}) {
+		return index51_key.encodeRange({
+			gt: gt ? index51_indexify(gt) : null,
+			lt: lt ? index51_indexify(lt) : null,
+			gte: gte ? index51_indexify(gte) : null,
+			lte: lte ? index51_indexify(lte) : null
+		});
+	},
+	encodeValue: (record) => index51.collection.encodeKey(record),
+	encodeIndexKeys(record, context) {
+		return [index51_key.encode([record.peerKey, record.peerKey, record.repoId])];
+	},
+	reconstruct: (keyBuf, valueBuf) => valueBuf,
+	offset: collection50.indexes.length,
+	collection: collection50
+};
+collection50.indexes.push(index51);
+
+const collections = [
+	collection0,
+	collection1,
+	collection2,
+	collection3,
+	collection7,
+	collection8,
+	collection9,
+	collection10,
+	collection11,
+	collection12,
+	collection13,
+	collection14,
+	collection15,
+	collection16,
+	collection17,
+	collection18,
+	collection19,
+	collection20,
+	collection21,
+	collection22,
+	collection23,
+	collection24,
+	collection25,
+	collection26,
+	collection27,
+	collection50
+];
+
+const indexes = [
+	index4,
+	index5,
+	index6,
+	index28,
+	index29,
+	index30,
+	index31,
+	index32,
+	index33,
+	index34,
+	index35,
+	index36,
+	index37,
+	index38,
+	index39,
+	index40,
+	index41,
+	index42,
+	index43,
+	index44,
+	index45,
+	index46,
+	index47,
+	index48,
+	index49,
+	index51
+];
 
 export default { versions, collections, indexes, resolveCollection, resolveIndex };
 
@@ -465,6 +3199,50 @@ function resolveCollection(name) {
 			return collection2;
 		case '@ghostdrive/joins':
 			return collection3;
+		case '@ghostdrive/users':
+			return collection7;
+		case '@ghostdrive/repos':
+			return collection8;
+		case '@ghostdrive/refs':
+			return collection9;
+		case '@ghostdrive/commits':
+			return collection10;
+		case '@ghostdrive/issues':
+			return collection11;
+		case '@ghostdrive/labels':
+			return collection12;
+		case '@ghostdrive/milestones':
+			return collection13;
+		case '@ghostdrive/pulls':
+			return collection14;
+		case '@ghostdrive/reviews':
+			return collection15;
+		case '@ghostdrive/comments':
+			return collection16;
+		case '@ghostdrive/reviewComments':
+			return collection17;
+		case '@ghostdrive/stars':
+			return collection18;
+		case '@ghostdrive/forks':
+			return collection19;
+		case '@ghostdrive/watches':
+			return collection20;
+		case '@ghostdrive/follows':
+			return collection21;
+		case '@ghostdrive/activities':
+			return collection22;
+		case '@ghostdrive/notifications':
+			return collection23;
+		case '@ghostdrive/threads':
+			return collection24;
+		case '@ghostdrive/posts':
+			return collection25;
+		case '@ghostdrive/wikiPages':
+			return collection26;
+		case '@ghostdrive/webhooks':
+			return collection27;
+		case '@ghostdrive/announcements':
+			return collection50;
 		default:
 			return null;
 	}
@@ -478,6 +3256,52 @@ function resolveIndex(name) {
 			return index5;
 		case '@ghostdrive/joins-by-session':
 			return index6;
+		case '@ghostdrive/users-by-handle':
+			return index28;
+		case '@ghostdrive/repos-by-owner':
+			return index29;
+		case '@ghostdrive/refs-by-repo':
+			return index30;
+		case '@ghostdrive/commits-by-repo':
+			return index31;
+		case '@ghostdrive/issues-by-repo':
+			return index32;
+		case '@ghostdrive/labels-by-repo':
+			return index33;
+		case '@ghostdrive/milestones-by-repo':
+			return index34;
+		case '@ghostdrive/pulls-by-repo':
+			return index35;
+		case '@ghostdrive/reviews-by-pull':
+			return index36;
+		case '@ghostdrive/comments-by-parent':
+			return index37;
+		case '@ghostdrive/reviewComments-by-pull':
+			return index38;
+		case '@ghostdrive/star-by-repo':
+			return index39;
+		case '@ghostdrive/star-by-user':
+			return index40;
+		case '@ghostdrive/fork-by-repo':
+			return index41;
+		case '@ghostdrive/fork-by-user':
+			return index42;
+		case '@ghostdrive/watch-by-repo':
+			return index43;
+		case '@ghostdrive/follow-by-target':
+			return index44;
+		case '@ghostdrive/activity-by-actor':
+			return index45;
+		case '@ghostdrive/activity-by-repo':
+			return index46;
+		case '@ghostdrive/notification-by-to':
+			return index47;
+		case '@ghostdrive/threads-by-repo':
+			return index48;
+		case '@ghostdrive/posts-by-thread':
+			return index49;
+		case '@ghostdrive/announcement-by-peer':
+			return index51;
 		default:
 			return null;
 	}

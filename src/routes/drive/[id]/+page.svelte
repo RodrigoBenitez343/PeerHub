@@ -3,6 +3,7 @@
 	import Breadcrumbs from '$lib/components/Breadcrumbs.svelte';
 	import FileGrid from '$lib/components/FileGrid.svelte';
 	import LivePeerCount from '$lib/components/LivePeerCount.svelte';
+	import RepoHeader from '$lib/components/RepoHeader.svelte';
 	import { invalidateAll } from '$app/navigation';
 
 	type Entry = { name: string; isFolder: boolean; cached?: boolean; size: number | null };
@@ -44,9 +45,15 @@
 		<div class="bg-bg-tertiary h-3 w-40 animate-pulse rounded opacity-50"></div>
 	</header>
 {:then drive}
-	<header
-		class="border-border bg-bg-secondary flex h-11 items-center gap-2 border-b px-3 md:gap-3 md:px-4"
-	>
+	<RepoHeader
+		id={drive.id}
+		name={drive.name}
+		visibility={data.repo.visibility}
+		active="files"
+		isGuest={drive.isGuest}
+		forkedFrom={data.repo.forkedFrom}
+	/>
+	<div class="border-border bg-bg-secondary flex items-center gap-2 border-b px-3 py-1.5 md:px-4">
 		<div class="min-w-0 flex-1">
 			<Breadcrumbs driveId={drive.id} driveName={drive.name} path={data.path} />
 		</div>
@@ -56,19 +63,7 @@
 			{reconnectSignal}
 			onchange={handlePeersChange}
 		/>
-		<a
-			href={`/drive/${drive.id}/settings`}
-			class="text-text-muted hover:text-accent rounded p-1.5 transition"
-			title="Drive settings"
-		>
-			<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" class="h-4 w-4">
-				<circle cx="8" cy="8" r="2" />
-				<path
-					d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4"
-				/>
-			</svg>
-		</a>
-	</header>
+	</div>
 
 	{#if drive.isGuest && peers === 0}
 		<div

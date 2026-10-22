@@ -21,6 +21,8 @@ declare module 'hyperswarm' {
 	}
 	export default class Hyperswarm extends EventEmitter {
 		constructor(opts?: HyperswarmOptions);
+		join(topic: Buffer | Uint8Array, opts?: { server?: boolean; limit?: number }): unknown;
+		leave(topic: Buffer | Uint8Array, opts?: { server?: boolean }): unknown;
 		destroy(): Promise<void>;
 		on(event: 'connection', listener: (conn: any) => void): this;
 		on(event: string, listener: (...args: unknown[]) => void): this;
@@ -35,13 +37,13 @@ declare module 'corestore' {
 		createKeyPair(name: string): Promise<{ publicKey: Buffer; secretKey: Buffer }>;
 		replicate(conn: unknown): unknown;
 		session(): Corestore;
-		get(opts: { name: string }): any;
+		get(opts: { name?: string; key?: Buffer | Uint8Array | string }): any;
 	}
 }
 
 declare module 'hyperbee2' {
 	export default class Hyperbee {
-		constructor(store: unknown, opts?: { name?: string });
+		constructor(store: unknown, opts?: { name?: string; core?: unknown });
 		ready(): Promise<void>;
 		close(): Promise<void>;
 	}
@@ -57,8 +59,11 @@ declare module 'hyperdb' {
 		update(collection: string, value: object): Promise<void>;
 		delete(collection: string, key: object): Promise<void>;
 		flush(): Promise<void>;
+		update(): Promise<void>;
 	}
 	const HyperDB: {
+		// No `autoUpdate` here on purpose: hyperdb's bee2 path calls bee.on('update'),
+		// and hyperbee2 is not an EventEmitter, so passing it throws at boot.
 		bee2(bee: unknown, def: unknown): HyperDB;
 	};
 	export default HyperDB;
@@ -92,6 +97,7 @@ declare module 'hyperdrive' {
 		get(path: string, opts?: object): Promise<any>;
 		list(prefix?: string, opts?: object): AsyncIterable<any>;
 		entry(path: string): Promise<any>;
+		mirror(out: unknown, opts?: object): { done(): Promise<void> };
 	}
 }
 
@@ -160,6 +166,7 @@ declare module 'protomux' {
 
 declare module 'sodium-native' {
 	export function randombytes_buf(buf: Buffer): void;
+	export function crypto_generichash(output: Buffer, input: Buffer): void;
 }
 
 declare module 'b4a' {

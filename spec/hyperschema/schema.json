@@ -1,5 +1,5 @@
 {
-	"version": 3,
+	"version": 7,
 	"schema": [
 		{
 			"name": "session",
@@ -40,6 +40,11 @@
 					"name": "lastOpened",
 					"type": "uint",
 					"version": 3
+				},
+				{
+					"name": "metaKey",
+					"type": "string",
+					"version": 5
 				}
 			]
 		},
@@ -136,6 +141,944 @@
 					"required": true,
 					"type": "uint",
 					"version": 1
+				}
+			]
+		},
+		{
+			"name": "user",
+			"namespace": "ghostdrive",
+			"compact": false,
+			"flagsPosition": 2,
+			"fields": [
+				{
+					"name": "peerKey",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "handle",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "displayName",
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "bio",
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "avatar",
+					"required": true,
+					"type": "buffer",
+					"version": 4
+				},
+				{
+					"name": "kind",
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "joinedAt",
+					"required": true,
+					"type": "uint",
+					"version": 4
+				}
+			]
+		},
+		{
+			"name": "repo",
+			"namespace": "ghostdrive",
+			"compact": false,
+			"flagsPosition": 3,
+			"fields": [
+				{
+					"name": "id",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "ownerKey",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "name",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "description",
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "visibility",
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "defaultBranch",
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "topics",
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "createdAt",
+					"required": true,
+					"type": "uint",
+					"version": 4
+				},
+				{
+					"name": "forkedFrom",
+					"type": "string",
+					"version": 6
+				},
+				{
+					"name": "sourceKey",
+					"type": "string",
+					"version": 6
+				}
+			]
+		},
+		{
+			"name": "ref",
+			"namespace": "ghostdrive",
+			"compact": false,
+			"flagsPosition": -1,
+			"fields": [
+				{
+					"name": "repoId",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "name",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "sha",
+					"required": true,
+					"type": "string",
+					"version": 4
+				}
+			]
+		},
+		{
+			"name": "commit",
+			"namespace": "ghostdrive",
+			"compact": false,
+			"flagsPosition": 2,
+			"fields": [
+				{
+					"name": "repoId",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "sha",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "parent",
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "treeDigest",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "authorKey",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "message",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "ts",
+					"required": true,
+					"type": "uint",
+					"version": 4
+				}
+			]
+		},
+		{
+			"name": "issue",
+			"namespace": "ghostdrive",
+			"compact": false,
+			"flagsPosition": 3,
+			"fields": [
+				{
+					"name": "repoId",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "number",
+					"required": true,
+					"type": "uint",
+					"version": 4
+				},
+				{
+					"name": "title",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "body",
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "authorKey",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "state",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "assigneeKey",
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "milestoneId",
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "labelIds",
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "createdAt",
+					"required": true,
+					"type": "uint",
+					"version": 4
+				},
+				{
+					"name": "closedAt",
+					"type": "uint",
+					"version": 4
+				}
+			]
+		},
+		{
+			"name": "label",
+			"namespace": "ghostdrive",
+			"compact": false,
+			"flagsPosition": 3,
+			"fields": [
+				{
+					"name": "repoId",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "id",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "name",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "color",
+					"type": "string",
+					"version": 4
+				}
+			]
+		},
+		{
+			"name": "milestone",
+			"namespace": "ghostdrive",
+			"compact": false,
+			"flagsPosition": 3,
+			"fields": [
+				{
+					"name": "repoId",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "id",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "title",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "due",
+					"type": "uint",
+					"version": 4
+				},
+				{
+					"name": "state",
+					"required": true,
+					"type": "string",
+					"version": 4
+				}
+			]
+		},
+		{
+			"name": "pull",
+			"namespace": "ghostdrive",
+			"compact": false,
+			"flagsPosition": 3,
+			"fields": [
+				{
+					"name": "repoId",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "number",
+					"required": true,
+					"type": "uint",
+					"version": 4
+				},
+				{
+					"name": "title",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "body",
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "headRef",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "baseRef",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "authorKey",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "state",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "mergeSha",
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "createdAt",
+					"required": true,
+					"type": "uint",
+					"version": 4
+				}
+			]
+		},
+		{
+			"name": "review",
+			"namespace": "ghostdrive",
+			"compact": false,
+			"flagsPosition": -1,
+			"fields": [
+				{
+					"name": "id",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "pullId",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "reviewerKey",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "state",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "ts",
+					"required": true,
+					"type": "uint",
+					"version": 4
+				}
+			]
+		},
+		{
+			"name": "comment",
+			"namespace": "ghostdrive",
+			"compact": false,
+			"flagsPosition": 5,
+			"fields": [
+				{
+					"name": "id",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "kind",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "parentId",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "authorKey",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "body",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "path",
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "line",
+					"type": "uint",
+					"version": 4
+				},
+				{
+					"name": "ts",
+					"required": true,
+					"type": "uint",
+					"version": 4
+				}
+			]
+		},
+		{
+			"name": "reviewComment",
+			"namespace": "ghostdrive",
+			"compact": false,
+			"flagsPosition": -1,
+			"fields": [
+				{
+					"name": "id",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "pullId",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "path",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "line",
+					"required": true,
+					"type": "uint",
+					"version": 4
+				},
+				{
+					"name": "authorKey",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "body",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "ts",
+					"required": true,
+					"type": "uint",
+					"version": 4
+				}
+			]
+		},
+		{
+			"name": "star",
+			"namespace": "ghostdrive",
+			"compact": false,
+			"flagsPosition": -1,
+			"fields": [
+				{
+					"name": "byKey",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "repoId",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "ts",
+					"required": true,
+					"type": "uint",
+					"version": 4
+				}
+			]
+		},
+		{
+			"name": "fork",
+			"namespace": "ghostdrive",
+			"compact": false,
+			"flagsPosition": -1,
+			"fields": [
+				{
+					"name": "byKey",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "repoId",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "parentRepoId",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "newRepoId",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "ts",
+					"required": true,
+					"type": "uint",
+					"version": 4
+				}
+			]
+		},
+		{
+			"name": "watch",
+			"namespace": "ghostdrive",
+			"compact": false,
+			"flagsPosition": -1,
+			"fields": [
+				{
+					"name": "byKey",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "repoId",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "level",
+					"required": true,
+					"type": "string",
+					"version": 4
+				}
+			]
+		},
+		{
+			"name": "follow",
+			"namespace": "ghostdrive",
+			"compact": false,
+			"flagsPosition": -1,
+			"fields": [
+				{
+					"name": "followerKey",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "targetKey",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "ts",
+					"required": true,
+					"type": "uint",
+					"version": 4
+				}
+			]
+		},
+		{
+			"name": "activity",
+			"namespace": "ghostdrive",
+			"compact": false,
+			"flagsPosition": 2,
+			"fields": [
+				{
+					"name": "id",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "actorKey",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "repoId",
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "type",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "refId",
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "ts",
+					"required": true,
+					"type": "uint",
+					"version": 4
+				}
+			]
+		},
+		{
+			"name": "notification",
+			"namespace": "ghostdrive",
+			"compact": false,
+			"flagsPosition": 3,
+			"fields": [
+				{
+					"name": "id",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "toKey",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "activityId",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "read",
+					"required": false,
+					"type": "bool",
+					"version": 4
+				}
+			]
+		},
+		{
+			"name": "thread",
+			"namespace": "ghostdrive",
+			"compact": false,
+			"flagsPosition": 3,
+			"fields": [
+				{
+					"name": "id",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "repoId",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "title",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "category",
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "authorKey",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "state",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "createdAt",
+					"required": true,
+					"type": "uint",
+					"version": 4
+				}
+			]
+		},
+		{
+			"name": "post",
+			"namespace": "ghostdrive",
+			"compact": false,
+			"flagsPosition": -1,
+			"fields": [
+				{
+					"name": "id",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "threadId",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "authorKey",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "body",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "ts",
+					"required": true,
+					"type": "uint",
+					"version": 4
+				}
+			]
+		},
+		{
+			"name": "wikiPage",
+			"namespace": "ghostdrive",
+			"compact": false,
+			"flagsPosition": -1,
+			"fields": [
+				{
+					"name": "repoId",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "name",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "body",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "ts",
+					"required": true,
+					"type": "uint",
+					"version": 4
+				}
+			]
+		},
+		{
+			"name": "webhook",
+			"namespace": "ghostdrive",
+			"compact": false,
+			"flagsPosition": 4,
+			"fields": [
+				{
+					"name": "repoId",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "id",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "url",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "events",
+					"required": true,
+					"type": "string",
+					"version": 4
+				},
+				{
+					"name": "secret",
+					"type": "string",
+					"version": 4
+				}
+			]
+		},
+		{
+			"name": "announcement",
+			"namespace": "ghostdrive",
+			"compact": false,
+			"flagsPosition": 3,
+			"fields": [
+				{
+					"name": "peerKey",
+					"required": true,
+					"type": "string",
+					"version": 7
+				},
+				{
+					"name": "repoId",
+					"required": true,
+					"type": "string",
+					"version": 7
+				},
+				{
+					"name": "name",
+					"required": true,
+					"type": "string",
+					"version": 7
+				},
+				{
+					"name": "description",
+					"type": "string",
+					"version": 7
+				},
+				{
+					"name": "visibility",
+					"type": "string",
+					"version": 7
+				},
+				{
+					"name": "defaultBranch",
+					"type": "string",
+					"version": 7
+				},
+				{
+					"name": "driveKey",
+					"type": "string",
+					"version": 7
+				},
+				{
+					"name": "metaKey",
+					"type": "string",
+					"version": 7
+				},
+				{
+					"name": "ts",
+					"required": true,
+					"type": "uint",
+					"version": 7
+				},
+				{
+					"name": "lastSeen",
+					"required": true,
+					"type": "uint",
+					"version": 7
 				}
 			]
 		}

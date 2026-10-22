@@ -4,6 +4,9 @@ import Hyperdrive from 'hyperdrive';
 import path from 'path';
 import b4a from 'b4a';
 import fs from 'fs';
+import Hyperbee from 'hyperbee2';
+import HyperDB from 'hyperdb';
+import def from '../../../spec/hyperdb/index.js';
 import SharedDrive from './shared-drive.js';
 import SessionSync, { type SyncPairView, type SyncSummary } from './sync.js';
 import { invalidateEntries } from './loaders.js';
@@ -17,6 +20,7 @@ interface DriveSessionOptions {
 	name: string;
 	icon?: Buf;
 	key?: Buf | null;
+	metaKey?: string | null;
 }
 
 export interface DriveListEntry {
@@ -24,32 +28,73 @@ export interface DriveListEntry {
 	type: 'cache' | 'shared' | 'hyperdrive' | 'local';
 }
 
+// Collections a guest may ask the host to write on its behalf. Anything not
+// listed here is refused by the host, so the RPC can never be used as a raw
+// database write.
+const META_WRITE_COLLECTIONS = new Set([
+	'@ghostdrive/commits',
+	'@ghostdrive/refs',
+	'@ghostdrive/issues',
+	'@ghostdrive/labels',
+	'@ghostdrive/milestones',
+	'@ghostdrive/pulls',
+	'@ghostdrive/reviews',
+	'@ghostdrive/comments',
+	'@ghostdrive/reviewComments',
+	'@ghostdrive/stars',
+	'@ghostdrive/forks',
+	'@ghostdrive/watch',
+	'@ghostdrive/follows',
+	'@ghostdrive/wikiPages',
+	'@ghostdrive/threads',
+	'@ghostdrive/posts',
+	'@ghostdrive/webhooks'
+]);
+
 export default class DriveSession extends ReadyResource {
 	app: GhostDriveApp;
 	id: string;
 	name: string;
 	icon: Buf;
 	private _remoteKey: Buf | null;
+	private _remoteMetaKey: string | null;
 	drive: SharedDrive | null;
 	cache: Localdrive | null;
 	shared: Localdrive | null;
 	sharedPath: string;
 	sync: SessionSync | null;
 	private driveMap: Map<string, Localdrive | Hyperdrive>;
+	// Per-repo metadata log (commits, refs, issues, PRs, social). One writable
+	// core owned by the host; guests open the same core read-only (the key rides
+	// in the invite) and forward writes to the host over shared-drive RPC.
+	meta: ReturnType<typeof HyperDB.bee2> | null;
+	metaBee: Hyperbee | null;
+	metaCore: any;
+	// True when this peer can write the metadata core directly (the host).
+	metaWritable: boolean;
+	// True when this core is the repo's shared one. A guest joined before the
+	// meta key existed gets false: its own local core, never shared.
+	metaShared: boolean;
 
-	constructor({ app, id, name, icon, key }: DriveSessionOptions) {
+	constructor({ app, id, name, icon, key, metaKey }: DriveSessionOptions) {
 		super();
 		this.app = app;
 		this.id = id;
 		this.name = name;
 		this.icon = icon ?? b4a.alloc(0);
 		this._remoteKey = key ?? null;
+		this._remoteMetaKey = metaKey ?? null;
 		this.drive = null;
 		this.cache = null;
 		this.shared = null;
 		this.sharedPath = '';
 		this.sync = null;
 		this.driveMap = new Map();
+		this.meta = null;
+		this.metaBee = null;
+		this.metaCore = null;
+		this.metaWritable = false;
+		this.metaShared = false;
 	}
 
 	get peerCount(): number {
@@ -61,15 +106,24 @@ export default class DriveSession extends ReadyResource {
 	}
 
 	protected async _open(): Promise<void> {
+		const t0 = Date.now();
+		const log = (step: string, extra = '') =>
+			console.log(
+				`[session ${this.id}] ${step} (+${Date.now() - t0}ms)${extra ? ' — ' + extra : ''}`
+			);
+
 		const sessionDir = path.join(this.app.dir, 'sessions', this.id);
+		log('opening', sessionDir);
 
 		this.cache = new Localdrive(path.join(sessionDir, 'cache'));
 		await this.cache.ready();
+		log('cache ready');
 
 		// Everyone writes new files here; the host owns the folder on disk.
 		this.sharedPath = path.join(sessionDir, 'shared');
 		this.shared = new Localdrive(this.sharedPath, { atomic: true });
 		await this.shared.ready();
+		log('shared folder ready');
 
 		const initialDrives: (Localdrive | Hyperdrive)[] = [];
 
@@ -101,6 +155,8 @@ export default class DriveSession extends ReadyResource {
 			}
 		}
 
+		log('registered drives', String(initialDrives.length));
+
 		// The offline cache is mounted last: a cached copy must never shadow the
 		// live shared file system while the host is reachable.
 		initialDrives.push(this.shared, this.cache);
@@ -125,6 +181,7 @@ export default class DriveSession extends ReadyResource {
 
 		this.drive = new SharedDrive(this.app.store!.session(), driveOpts as any);
 		await this.drive!.ready();
+		log('shared drive ready', this.isGuest ? 'guest' : 'host');
 
 		this.drive!.on('connected', () => {
 			console.log(`[session ${this.id}] connected`);
@@ -140,8 +197,63 @@ export default class DriveSession extends ReadyResource {
 		// A peer changed a file: drop cached listings so the next render is fresh.
 		this.drive!.on('changed', () => invalidateEntries(this.id));
 
+		// Repository metadata core. The host owns it writable; a guest opens the
+		// very same core read-only, so commits/issues replicate along with files.
+		// A guest without the meta key (joined before it existed) would otherwise
+		// write a private local copy nobody else ever sees, so it is marked
+		// unshared and refused at write time instead of diverging silently.
+		const metaStore = this.app.store!.session();
+		this.metaShared = !this._remoteKey || !!this._remoteMetaKey;
+		log('opening meta core', this._remoteMetaKey ? 'by guest key' : 'named host core');
+		this.metaCore = this._remoteMetaKey
+			? metaStore.get({ key: b4a.from(this._remoteMetaKey, 'hex') })
+			: metaStore.get({ name: 'repo-meta/' + this.id });
+		await this.metaCore.ready();
+		this.metaWritable = this.metaShared && this.metaCore.writable !== false;
+		const mode = this.metaWritable
+			? 'writable'
+			: this.metaShared
+				? 'replica+forward'
+				: 'private-unshared';
+		log(
+			'meta core ready',
+			`${b4a.toString(this.metaCore.key, 'hex').slice(0, 12)} coreWritable=${this.metaCore.writable !== false} mode=${mode}`
+		);
+
+		this.metaBee = new Hyperbee(metaStore, { core: this.metaCore });
+		await this.metaBee.ready();
+		log('meta bee ready');
+		// NOTE: no `autoUpdate` option — hyperdb's bee2 path calls `bee.on('update')` and
+		// hyperbee2 is not an EventEmitter, which throws at boot. Guests refresh
+		// explicitly in refreshMeta() instead.
+		this.meta = HyperDB.bee2(this.metaBee, def);
+		await this.meta.ready();
+		log('meta db ready');
+
+		// Guests write through the host: its core is the only writer, so every
+		// record lands where all peers replicate it from.
+		this.drive!.onMetaWrite = async (collection, doc) => {
+			if (!META_WRITE_COLLECTIONS.has(collection)) {
+				throw new Error(`Unknown repository collection: ${collection}`);
+			}
+			if (!this.meta || !this.metaWritable) throw new Error('Metadata core is not writable here');
+			await this.meta.insert(collection, doc as object);
+			await this.meta.flush();
+		};
+
+		this.drive!.onMetaDelete = async (collection, key) => {
+			if (!META_WRITE_COLLECTIONS.has(collection)) {
+				throw new Error(`Unknown repository collection: ${collection}`);
+			}
+			if (!this.meta || !this.metaWritable) throw new Error('Metadata core is not writable here');
+			await this.meta.delete(collection, key as object);
+			await this.meta.flush();
+		};
+
 		this.sync = new SessionSync(this);
 		await this.sync.ready();
+
+		log('sync ready');
 
 		console.log(
 			`[session ${this.id}] opened — drives: ${this.drive!.drives.length}, key: ${b4a.toString(this.drive!.key, 'hex').slice(0, 12)}...`
@@ -151,6 +263,13 @@ export default class DriveSession extends ReadyResource {
 	protected async _close(): Promise<void> {
 		if (this.sync) await this.sync.close();
 		this.sync = null;
+
+		if (this.meta) await this.meta.close();
+		if (this.metaBee) await this.metaBee.close();
+		if (this.metaCore) await this.metaCore.close();
+		this.meta = null;
+		this.metaBee = null;
+		this.metaCore = null;
 
 		for (const drive of this.driveMap.values()) {
 			try {
@@ -267,6 +386,78 @@ export default class DriveSession extends ReadyResource {
 			throw new Error('Not connected to the host — reconnect before changing shared files');
 		}
 		return this.drive;
+	}
+
+	// --- Repository metadata (commits, refs, issues, PRs, ...) ---
+
+	async putMeta(collection: string, value: object): Promise<void> {
+		if (!this.meta) throw new Error('repo metadata db not ready');
+
+		if (this.metaWritable) {
+			await this.meta.insert(collection, value);
+			await this.meta.flush();
+			return;
+		}
+
+		if (!this.metaShared) {
+			throw new Error(
+				'This repo was joined before repository metadata was shared — rejoin with a fresh invite'
+			);
+		}
+
+		// A guest's core is a read-only replica: the record has to be written by
+		// the owner or it would stay invisible to everybody else.
+		if (!this.drive || this.drive.peers === 0) {
+			throw new Error('Repository metadata is hosted by the repo owner — reconnect to write');
+		}
+		await this.drive.putMetaRemote(collection, value);
+	}
+
+	get metaKeyHex(): string | null {
+		return this.metaCore ? b4a.toString(this.metaCore.key, 'hex') : null;
+	}
+
+	async deleteMeta(collection: string, key: object): Promise<void> {
+		if (!this.meta) throw new Error('repo metadata db not ready');
+
+		if (this.metaWritable) {
+			await this.meta.delete(collection, key);
+			await this.meta.flush();
+			return;
+		}
+
+		if (!this.metaShared) {
+			throw new Error(
+				'This repo was joined before repository metadata was shared — rejoin with a fresh invite'
+			);
+		}
+		if (!this.drive || this.drive.peers === 0) {
+			throw new Error('Repository metadata is hosted by the repo owner — reconnect to delete');
+		}
+		await this.drive.deleteMetaRemote(collection, key);
+	}
+
+	// A guest's bee is a read-only replica: pick up whatever the host appended
+	// since the last read. `update()` is cheap when nothing changed.
+	private async refreshMeta(): Promise<void> {
+		if (!this.meta || this.metaWritable) return;
+		try {
+			await this.meta.update();
+		} catch (err: any) {
+			console.warn(`[session ${this.id}] meta refresh skipped: ${err.message}`);
+		}
+	}
+
+	async findMeta(collection: string, range: object = { gte: {}, lte: {} }): Promise<unknown[]> {
+		if (!this.meta) return [];
+		await this.refreshMeta();
+		return this.meta.find(collection, range).toArray();
+	}
+
+	async getMeta(collection: string, key: object): Promise<unknown> {
+		if (!this.meta) return null;
+		await this.refreshMeta();
+		return this.meta.get(collection, key);
 	}
 
 	// --- Local sync ---

@@ -108,6 +108,13 @@ const PutChunkRequest = struct([
 	['data', c.buffer]
 ]);
 const PutEndRequest = struct([['id', c.string]]);
+// Repository metadata (commits, refs, issues, PRs) is owned by the host's
+// writable core. Guests forward records over this channel so everyone
+// replicating the repo sees them; the collection is a server-side allowlist.
+const MetaPutRequest = struct([
+	['collection', c.string],
+	['doc', c.string]
+]);
 
 const manifestOpts = { requestEncoding: c.string, responseEncoding: ManifestResponse };
 const statOpts = { requestEncoding: c.string, responseEncoding: StatResponse };
@@ -116,6 +123,7 @@ const delOpts = { requestEncoding: c.string, responseEncoding: OkResponse };
 const putBeginOpts = { requestEncoding: PutBeginRequest, responseEncoding: OkResponse };
 const putChunkOpts = { requestEncoding: PutChunkRequest, responseEncoding: OkResponse };
 const putEndOpts = { requestEncoding: PutEndRequest, responseEncoding: OkResponse };
+const metaPutOpts = { requestEncoding: MetaPutRequest, responseEncoding: OkResponse };
 
 // --- path helpers (mirror distributed-drive's mount rules) ----------------
 
@@ -221,6 +229,11 @@ function drained(ws: any): Promise<void> {
 export default class SharedDrive extends DistributedDrive {
 	cache: DriveLike | null = null;
 	shared: DriveLike | null = null;
+	// Set by the host session: applies a repo metadata record to the writable
+	// metadata core on behalf of a guest.
+	onMetaWrite: ((collection: string, doc: unknown) => Promise<void>) | null = null;
+	// Same, for deletes (branch removal).
+	onMetaDelete: ((collection: string, key: unknown) => Promise<void>) | null = null;
 
 	private _uploads = new Map<string, Upload>();
 	private _writeRpcs = new Set<any>();
@@ -232,6 +245,8 @@ export default class SharedDrive extends DistributedDrive {
 		super(store, opts);
 		this.cache = opts.cache ?? null;
 		this.shared = opts.shared ?? null;
+		this.onMetaWrite = opts.onMetaWrite ?? null;
+		this.onMetaDelete = opts.onMetaDelete ?? null;
 	}
 
 	// True when this peer serves the files (it created the session) instead of
@@ -374,6 +389,30 @@ export default class SharedDrive extends DistributedDrive {
 		const end = await rpc.request('put-end', { id }, putEndOpts);
 		if (!end.ok) throw new Error(end.error || 'Upload failed');
 		return { size: end.size, mtime: end.mtime || null };
+	}
+
+	async putMetaRemote(collection: string, doc: unknown): Promise<void> {
+		if (this.isHost) throw new Error('This peer hosts the repo metadata already');
+
+		const rpc = await this._writeChannel();
+		const res = await rpc.request(
+			'meta-put',
+			{ collection, doc: JSON.stringify(doc) },
+			metaPutOpts
+		);
+		if (!res.ok) throw new Error(res.error || 'Repository metadata write failed');
+	}
+
+	async deleteMetaRemote(collection: string, key: unknown): Promise<void> {
+		if (this.isHost) throw new Error('This peer hosts the repo metadata already');
+
+		const rpc = await this._writeChannel();
+		const res = await rpc.request(
+			'meta-del',
+			{ collection, doc: JSON.stringify(key) },
+			metaPutOpts
+		);
+		if (!res.ok) throw new Error(res.error || 'Repository metadata delete failed');
 	}
 
 	async deleteShared(path: string): Promise<void> {
@@ -545,6 +584,8 @@ export default class SharedDrive extends DistributedDrive {
 			rpc.respond('put-chunk', putChunkOpts, (req: any) => this._onPutChunk(req));
 			rpc.respond('put-end', putEndOpts, (req: any) => this._onPutEnd(req));
 			rpc.respond('put-abort', putEndOpts, (req: any) => this._onPutAbort(req));
+			rpc.respond('meta-put', metaPutOpts, (req: any) => this._onMetaPut(req));
+			rpc.respond('meta-del', metaPutOpts, (req: any) => this._onMetaDelete(req));
 			rpc.respond('del', delOpts, (path: string) => this._onDelete(path));
 		});
 	}
@@ -641,6 +682,40 @@ export default class SharedDrive extends DistributedDrive {
 			} catch {}
 		}
 		return ok();
+	}
+
+	private async _onMetaPut({ collection, doc }: { collection: string; doc: string }) {
+		try {
+			if (!this.onMetaWrite) throw new Error('This repo does not accept metadata writes');
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(doc);
+			} catch {
+				throw new Error('Malformed metadata record');
+			}
+			if (!parsed || typeof parsed !== 'object') throw new Error('Malformed metadata record');
+			await this.onMetaWrite(collection, parsed);
+			return ok();
+		} catch (err) {
+			return fail(err);
+		}
+	}
+
+	private async _onMetaDelete({ collection, doc }: { collection: string; doc: string }) {
+		try {
+			if (!this.onMetaDelete) throw new Error('This repo does not accept metadata deletes');
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(doc);
+			} catch {
+				throw new Error('Malformed metadata key');
+			}
+			if (!parsed || typeof parsed !== 'object') throw new Error('Malformed metadata key');
+			await this.onMetaDelete(collection, parsed);
+			return ok();
+		} catch (err) {
+			return fail(err);
+		}
 	}
 
 	private async _onDelete(path: string) {
