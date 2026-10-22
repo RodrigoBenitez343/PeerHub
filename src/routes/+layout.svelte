@@ -17,7 +17,7 @@
 </script>
 
 <svelte:head>
-	<title>Ghost Drive</title>
+	<title>PeerHub</title>
 	<link rel="icon" href={logo} />
 </svelte:head>
 
@@ -70,7 +70,7 @@
 				<span
 					class="text-text-secondary min-w-0 flex-1 truncate font-mono text-[10px] tracking-[3px] uppercase"
 				>
-					{data.sessions.find((s: any) => s.id === page.params?.id)?.name ?? 'Ghost Drive'}
+					{data.sessions.find((s: any) => s.id === page.params?.id)?.name ?? 'PeerHub'}
 				</span>
 			</div>
 		</div>

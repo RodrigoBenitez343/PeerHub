@@ -2,7 +2,7 @@
 	import FileItem from './FileItem.svelte';
 	import Modal from './Modal.svelte';
 	import { detectKind } from '$lib';
-	import { compileIgnore, planUpload, type IgnoreSource } from '$lib/ignore';
+	import { compileIgnore, pickedRelPath, planUpload, type IgnoreSource } from '$lib/ignore';
 	import { invalidateAll } from '$app/navigation';
 	import logo from '$lib/assets/images/ghost-mark.png';
 
@@ -56,6 +56,9 @@
 	async function uploadFiles(event: Event) {
 		const input = event.currentTarget as HTMLInputElement;
 		const picked = [...(input.files ?? [])];
+		// A folder pick means "upload what is inside this folder here", so the
+		// picked folder's own name is not part of the path.
+		const isFolderPick = input.hasAttribute('webkitdirectory');
 		input.value = '';
 		if (picked.length === 0) return;
 
@@ -64,7 +67,9 @@
 		// Filter before sending a byte. `planUpload` also reads .gitignore files that
 		// travel with the picked folder: they are not in the repo yet, so the
 		// server-side rules alone would not know about them.
-		const plan = await planUpload(picked, dirPath, ignore, (file) => file.text());
+		const plan = await planUpload(picked, dirPath, ignore, (file) => file.text(), {
+			stripRootFolder: isFolderPick
+		});
 		const { send: files } = plan;
 		let skipped = plan.skipped;
 
@@ -78,9 +83,15 @@
 
 		for (const file of files) {
 			uploading = { ...uploading, name: file.name };
-			const relative = (file as any).webkitRelativePath || file.name;
+			const relative = pickedRelPath(file, isFolderPick);
 			try {
-				const res = await fetch(apiPath(relative), { method: 'PUT', body: file });
+				// Always declare the type: a request without Content-Type loses its body
+				// before it reaches the route (browsers omit it for unknown extensions).
+				const res = await fetch(apiPath(relative), {
+					method: 'PUT',
+					body: file,
+					headers: { 'content-type': file.type || 'application/octet-stream' }
+				});
 				if (!res.ok) throw new Error((await res.text()) || res.statusText);
 				const result = await res.json().catch(() => null);
 				if (result?.skipped === 'gitignore') skipped++;

@@ -1,11 +1,11 @@
 #!/bin/sh
-# Launch Ghost Drive from this folder. A second launch is refused while the
+# Launch PeerHub from this folder. A second launch is refused while the
 # first one holds .app-instance.lock, so instances never stack - the lock is
 # released by the kernel when the process exits, even after a hard kill.
 # Optional args replace the default command, e.g. "./run.sh npm run build".
-# GHOST_DRIVE_DEBUG=1 turns on shell tracing.
+# PEERHUB_DEBUG=1 turns on shell tracing (GHOST_DRIVE_DEBUG is still accepted).
 
-if [ "${GHOST_DRIVE_DEBUG:-0}" = "1" ]; then
+if [ "${PEERHUB_DEBUG:-${GHOST_DRIVE_DEBUG:-0}}" = "1" ]; then
 	set -x
 fi
 
@@ -29,7 +29,7 @@ cleanup() {
 		rm -f "$LOCK"
 	fi
 	if [ "$code" -ne 0 ] && [ -t 0 ]; then
-		printf '\n[ghost-drive] stopped with code %s. Press Enter to close ...' "$code"
+		printf '\n[peerhub] stopped with code %s. Press Enter to close ...' "$code"
 		read -r _ || true
 	fi
 	exit "$code"
@@ -60,7 +60,7 @@ if ! command -v npm >/dev/null 2>&1; then
 fi
 
 if ! command -v npm >/dev/null 2>&1; then
-	echo "[ghost-drive] npm not found on PATH." >&2
+	echo "[peerhub] npm not found on PATH." >&2
 	echo "  Install Node.js, or start this from a terminal where npm works." >&2
 	echo "  PATH is: $PATH" >&2
 	exit 1
@@ -69,29 +69,29 @@ fi
 if command -v flock >/dev/null 2>&1; then
 	exec 9>.app-instance.lock
 	if ! flock -n 9; then
-		echo "[ghost-drive] already running - close the existing window first." >&2
+		echo "[peerhub] already running - close the existing window first." >&2
 		exit 1
 	fi
 else
 	# No flock on this box: fall back to a pid file.
 	LOCK=.app-instance.pid
 	if [ -f "$LOCK" ] && kill -0 "$(cat "$LOCK")" 2>/dev/null; then
-		echo "[ghost-drive] already running (pid $(cat "$LOCK")) - close the existing window first." >&2
+		echo "[peerhub] already running (pid $(cat "$LOCK")) - close the existing window first." >&2
 		exit 1
 	fi
 	echo $$ >"$LOCK"
 fi
 
 if [ ! -d node_modules ]; then
-	echo "[ghost-drive] node_modules missing, installing dependencies ..."
+	echo "[peerhub] node_modules missing, installing dependencies ..."
 	# A fresh PC has no lockfile (package-lock.json is gitignored) and may also
 	# carry a stale file: dependency symlink, so the first install can fail
 	# where running it again by hand works. Retry the same way.
 	if ! npm install; then
-		echo "[ghost-drive] npm install failed, retrying once ..." >&2
+		echo "[peerhub] npm install failed, retrying once ..." >&2
 		rm -rf node_modules
 		if ! npm install; then
-			echo "[ghost-drive] npm install failed twice - see the error above." >&2
+			echo "[peerhub] npm install failed twice - see the error above." >&2
 			echo "  If it mentions sodium-native or rabin-native, install build tools" >&2
 			echo "  (python3, make, g++) and run this script again." >&2
 			exit 1

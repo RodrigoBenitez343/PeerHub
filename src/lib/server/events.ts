@@ -1,6 +1,6 @@
 import b4a from 'b4a';
 import { randombytes_buf } from 'sodium-native';
-import type GhostDriveApp from './app.js';
+import type PeerHubApp from './app.js';
 
 // The single event stream every PeerHub feature writes into. One append-only
 // `activity` row per action feeds the contributions graph, notifications and
@@ -33,13 +33,13 @@ function newId(): string {
 
 // Same rule as users.ts: never `await app.ready()` here. Activity can be emitted
 // while the app is still opening, and ready() would wait on that open forever.
-function dbOf(app: GhostDriveApp) {
-	if (!app.db) throw new Error('ghost-drive database is not open yet');
+function dbOf(app: PeerHubApp) {
+	if (!app.db) throw new Error('PeerHub database is not open yet');
 	return app.db;
 }
 
 export async function emitActivity(
-	app: GhostDriveApp,
+	app: PeerHubApp,
 	ev: {
 		actorKey: string;
 		repoId?: string | null;
@@ -82,25 +82,19 @@ export async function emitActivity(
 	return activity;
 }
 
-export async function listActivityByActor(
-	app: GhostDriveApp,
-	actorKey: string
-): Promise<Activity[]> {
+export async function listActivityByActor(app: PeerHubApp, actorKey: string): Promise<Activity[]> {
 	return (await dbOf(app)
 		.find('@ghostdrive/activity-by-actor', { gte: { actorKey }, lte: { actorKey } })
 		.toArray()) as Activity[];
 }
 
-export async function listActivityByRepo(app: GhostDriveApp, repoId: string): Promise<Activity[]> {
+export async function listActivityByRepo(app: PeerHubApp, repoId: string): Promise<Activity[]> {
 	return (await dbOf(app)
 		.find('@ghostdrive/activity-by-repo', { gte: { repoId }, lte: { repoId } })
 		.toArray()) as Activity[];
 }
 
-export async function listNotifications(
-	app: GhostDriveApp,
-	toKey: string
-): Promise<Notification[]> {
+export async function listNotifications(app: PeerHubApp, toKey: string): Promise<Notification[]> {
 	return (await dbOf(app)
 		.find('@ghostdrive/notification-by-to', { gte: { toKey }, lte: { toKey } })
 		.toArray()) as Notification[];

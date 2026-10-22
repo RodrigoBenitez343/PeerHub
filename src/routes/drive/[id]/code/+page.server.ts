@@ -5,6 +5,7 @@ import { getSession } from '$lib/server/loaders';
 import { getRepoMeta } from '$lib/server/repos';
 import type { SharedFile } from '$lib/server/shared-drive';
 import { renderMarkdown } from '$lib/markdown';
+import { loadReadme, markdownOptions } from '$lib/server/readme';
 import {
 	DEFAULT_BRANCH,
 	createBranch,
@@ -89,26 +90,19 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	if (selected) {
 		try {
 			file = await previewFile(session, selected);
-			if (file.text !== null && isMarkdown(file.path)) fileHtml = renderMarkdown(file.text);
+			if (file.text !== null && isMarkdown(file.path)) {
+				// Links and images resolve relative to the file being previewed,
+				// so a README inside docs/ can reference docs/ assets.
+				const dir = file.path.slice(0, file.path.lastIndexOf('/')) || '/';
+				fileHtml = renderMarkdown(file.text, markdownOptions(session, dir));
+			}
 		} catch (err: any) {
 			fileError = err.message;
 		}
 	}
 
 	// Nothing selected: show the README at the repo root if there is one.
-	let readme: { path: string; html: string } | null = null;
-	if (!selected && !filesError) {
-		const candidate = files.find((entry) => /^\/readme\.(md|markdown)$/i.test(entry.path));
-		if (candidate) {
-			try {
-				const preview = await previewFile(session, candidate.path);
-				if (preview.text !== null)
-					readme = { path: candidate.path, html: renderMarkdown(preview.text) };
-			} catch {
-				readme = null;
-			}
-		}
-	}
+	const readme = !selected && !filesError ? await loadReadme(session, files) : null;
 
 	return {
 		drive: { id: session.id, name: session.name, isGuest: session.isGuest },

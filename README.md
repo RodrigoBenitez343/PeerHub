@@ -44,21 +44,27 @@ Data lives outside the repo, in the platform data dir under `ghost-drive/`:
 Your peer key, repositories, metadata and cached files are all in there. Delete the folder
 to start over as a new peer.
 
+> **Why `ghost-drive`?** The directory name, the corestore keypair name, the Hyperdrive core
+> names, the `@ghostdrive/*` schema namespace and the `ghost-drive/shared` protocol are wire
+> and storage identities, not branding. Renaming any of them would give this peer a new
+> identity and orphan every existing repo, so they keep their original names. New invites use
+> `peerhub://`; older `ghostdrive://` links still parse.
+
 ## What works today
 
-| Area             | Behaviour                                                                                                                                              |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Repositories** | Create with name, description, visibility (public/private), default branch and icon. Each repo is a shared drive plus its own replicated metadata log. |
-| **Browse**       | Files tab (grid, grouping, filter, preview for image/video/audio/text) and Code tab (directory tree, folder navigation, sizes, README preview).        |
-| **Markdown**     | `.md` files render read-only. Renderer is small and escapes everything — no raw HTML.                                                                  |
-| **Commits**      | The Commit tab diffs the live tree against HEAD (`A`/`M`/`D` per path) and records a snapshot on the chosen branch.                                    |
-| **Branches**     | Create from an existing branch, switch, delete (default branch protected).                                                                             |
-| **Forks**        | Fork a public repo: it mirrors the drive into a new repo you own and keeps the source attribution.                                                     |
-| **Explore**      | Search every repo this device owns or opened, plus everything other peers announced. Filters for yours / public / private.                             |
-| **Public repos** | Open a read-only mirror with no invite. Private repos show by name only and need an invite link.                                                       |
-| **Uploads**      | Files or whole folders from any peer. `.gitignore` is honoured on both ends (see below).                                                               |
-| **Local sync**   | Link a folder on disk; reconcile on demand or every 15 s, two-way, additions/edits/deletions.                                                          |
-| **Identity**     | Persistent keypair stored in the data dir; a profile record (handle, display name, bio, avatar) is seeded on first run and replicated to peers.        |
+| Area             | Behaviour                                                                                                                                                                                       |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Repositories** | Create with name, description, visibility (public/private), default branch and icon. Each repo is a shared drive plus its own replicated metadata log.                                          |
+| **Browse**       | Files tab (grid, grouping, filter, preview for image/video/audio/text) and Code tab (directory tree, folder navigation, sizes). At the repo root both tabs render the README under the listing. |
+| **Markdown**     | READMEs and `.md` previews render with headings, nested/task lists, tables, quotes, code fences, images and resolved links. ` ```mermaid ` fences become diagrams client-side. No raw HTML.     |
+| **Commits**      | The Commit tab diffs the live tree against HEAD (`A`/`M`/`D` per path) and records a snapshot on the chosen branch.                                                                             |
+| **Branches**     | Create from an existing branch, switch, delete (default branch protected).                                                                                                                      |
+| **Forks**        | Fork a public repo: it mirrors the drive into a new repo you own and keeps the source attribution.                                                                                              |
+| **Explore**      | Search every repo this device owns or opened, plus everything other peers announced. Filters for yours / public / private.                                                                      |
+| **Public repos** | Open a read-only mirror with no invite. Private repos show by name only and need an invite link.                                                                                                |
+| **Uploads**      | Files or whole folders from any peer. Picking a folder uploads its **contents** into the current directory (no wrapper folder), and `.gitignore` is honoured on both ends.                      |
+| **Local sync**   | Link a folder on disk; reconcile on demand or every 15 s, two-way, additions/edits/deletions.                                                                                                   |
+| **Identity**     | Persistent keypair stored in the data dir; a profile record (handle, display name, bio, avatar) is seeded on first run and replicated to peers.                                                 |
 
 ### .gitignore-aware uploads
 
@@ -81,6 +87,31 @@ Enforcement is in two places so neither alone can be bypassed:
 
 Linked folders go through the same matcher, so a mirrored project folder does not push its
 `node_modules` into the shared drive.
+
+A folder pick uploads what is _inside_ the folder. Picking `my-project` puts `README.md` at
+`/README.md`, not `/my-project/README.md` — the same tree `git init` would give you.
+
+### Repository README
+
+Enter a repo and, at the root, the README is rendered under the file listing (Files tab) and
+under the tree (Code tab), the way a git host does it. Detection is case-insensitive
+(`README.md`, `readme.markdown`, `README`, …) and the first match wins.
+
+What renders:
+
+- headings, emphasis, inline code, strikethrough, blockquotes, horizontal rules
+- ordered and unordered lists, nested, with `- [x]` task checkboxes
+- tables, including `:---` / `---:` alignment
+- fenced code blocks with a language tag (no syntax highlighting yet)
+- ` ```mermaid ` blocks, drawn as SVG diagrams in the browser
+- images and links resolved **repo-relative**: `![logo](./img/logo.png)` loads the file from
+  this repo, `[guide](docs/guide.md)` opens the file viewer, `docs/` opens the directory
+
+Safety: the parser escapes everything first and only emits a fixed set of tags, so raw HTML in
+a README is shown as text, never executed. `javascript:` links are dropped, links that climb
+out of the repo root are reduced to their label, and mermaid runs with `securityLevel: 'strict'`
+and no network access. A diagram that fails to parse keeps its source and prints mermaid's
+error above it — it never renders blank.
 
 ## How it works
 
@@ -121,21 +152,24 @@ gap list.
 
 ### Code map
 
-| Path                             | Role                                                                                  |
-| -------------------------------- | ------------------------------------------------------------------------------------- |
-| `src/lib/server/app.ts`          | corestore, keypair, swarm, root db, repo registry, join/create/fork                   |
-| `src/lib/server/session.ts`      | one repository: cache + shared drives, metadata core, write forwarding                |
-| `src/lib/server/shared-drive.ts` | RPC layer over `distributed-drive` (uploads, deletes, meta writes)                    |
-| `src/lib/server/git.ts`          | tree digests, commits, refs, diff, file preview                                       |
-| `src/lib/server/repos.ts`        | repo catalog rows, fork, open-public                                                  |
-| `src/lib/server/directory.ts`    | peer repo announcements                                                               |
-| `src/lib/server/users.ts`        | identity and profiles                                                                 |
-| `src/lib/server/events.ts`       | activity and notifications                                                            |
-| `src/lib/server/ignores.ts`      | `.gitignore` loading for the upload guard and sync                                    |
-| `src/lib/server/sync.ts`         | linked-folder two-way reconcile                                                       |
-| `src/lib/ignore.ts`              | shared `.gitignore` parser/matcher and upload planner                                 |
-| `build.cjs`                      | hyperschema definitions → `spec/hyperschema`, `spec/hyperdb`                          |
-| `src/routes/`                    | `/` dashboard, `/explore`, `/drive/[id]` with `code`, `commit`, `settings`, `preview` |
+| Path                                 | Role                                                                                  |
+| ------------------------------------ | ------------------------------------------------------------------------------------- |
+| `src/lib/server/app.ts`              | corestore, keypair, swarm, root db, repo registry, join/create/fork                   |
+| `src/lib/server/session.ts`          | one repository: cache + shared drives, metadata core, write forwarding                |
+| `src/lib/server/shared-drive.ts`     | RPC layer over `distributed-drive` (uploads, deletes, meta writes)                    |
+| `src/lib/server/git.ts`              | tree digests, commits, refs, diff, file preview                                       |
+| `src/lib/server/repos.ts`            | repo catalog rows, fork, open-public                                                  |
+| `src/lib/server/directory.ts`        | peer repo announcements                                                               |
+| `src/lib/server/users.ts`            | identity and profiles                                                                 |
+| `src/lib/server/events.ts`           | activity and notifications                                                            |
+| `src/lib/server/ignores.ts`          | `.gitignore` loading for the upload guard and sync                                    |
+| `src/lib/server/sync.ts`             | linked-folder two-way reconcile                                                       |
+| `src/lib/server/readme.ts`           | root README detection + repo-relative link/image resolution                           |
+| `src/lib/ignore.ts`                  | shared `.gitignore` parser/matcher and upload planner                                 |
+| `src/lib/markdown.ts`                | markdown → HTML (escape-first; mermaid fences kept as placeholders)                   |
+| `src/lib/components/Markdown.svelte` | renders markdown HTML, upgrades mermaid fences to SVG                                 |
+| `build.cjs`                          | hyperschema definitions → `spec/hyperschema`, `spec/hyperdb`                          |
+| `src/routes/`                        | `/` dashboard, `/explore`, `/drive/[id]` with `code`, `commit`, `settings`, `preview` |
 
 Schema is generated, never hand-edited:
 
@@ -169,6 +203,7 @@ Fields are appended, not reordered: hyperschema identifies them by position.
 - **distributed-drive** — aggregates local and remote drives behind one interface
 - **protomux-rpc** — request/response over an encrypted peer connection
 - **localdrive** — filesystem drive for local folders and caches
+- **mermaid** — diagram rendering for README code fences (client-side, lazy-loaded)
 
 ## Known gaps
 
@@ -191,6 +226,8 @@ Honest list, all of it planned work rather than hidden behaviour:
 - **Commit authorship is a raw key.** Profiles exist, but the UI shows the first 8 hex
   characters instead of a handle, and there is no profile editor yet.
 - **The only way to change a `.gitignore` is to upload it again.** No in-app file editor.
+- **Markdown is a deliberate subset.** No raw HTML blocks, footnotes, reference-style links or
+  syntax highlighting. Mermaid is the one rich feature, and it ships as a lazy-loaded chunk.
 - **Android launcher icons are stale** (`resources/android/mipmap-*`); the web and desktop
   icons are current.
 - **No tests in the repo.** `npm test` points at a `test/` folder that does not exist yet;

@@ -105,7 +105,7 @@ export default class SessionSync {
 
 		const appDir = path.resolve(this.session.app.dir);
 		if (isInside(resolved, appDir) || isInside(appDir, resolved)) {
-			throw new Error('Pick a folder outside Ghost Drive storage');
+			throw new Error('Pick a folder outside PeerHub storage');
 		}
 		if (this.pairs.some((pair) => path.relative(pair.path, resolved) === '')) {
 			throw new Error('This folder is already being synced');

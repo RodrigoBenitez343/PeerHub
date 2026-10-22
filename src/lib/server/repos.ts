@@ -1,6 +1,6 @@
 import b4a from 'b4a';
 import Hyperdrive from 'hyperdrive';
-import type GhostDriveApp from './app.js';
+import type PeerHubApp from './app.js';
 import type DriveSession from './session.js';
 import { selfKeyHex } from './users.js';
 
@@ -25,7 +25,7 @@ export interface RepoMeta {
 
 // Write the catalog row for a session. Called from app.createSession / acceptInvite.
 export async function registerRepo(
-	app: GhostDriveApp,
+	app: PeerHubApp,
 	session: DriveSession,
 	meta: {
 		description?: string;
@@ -51,17 +51,17 @@ export async function registerRepo(
 	return rec;
 }
 
-export async function getRepoMeta(app: GhostDriveApp, id: string): Promise<RepoMeta | null> {
+export async function getRepoMeta(app: PeerHubApp, id: string): Promise<RepoMeta | null> {
 	await app.ready();
 	return (await app.db!.get('@ghostdrive/repos', { id })) as RepoMeta | null;
 }
 
-export async function listRepoMeta(app: GhostDriveApp): Promise<RepoMeta[]> {
+export async function listRepoMeta(app: PeerHubApp): Promise<RepoMeta[]> {
 	await app.ready();
 	return (await app.db!.find('@ghostdrive/repos', { gte: {}, lte: {} }).toArray()) as RepoMeta[];
 }
 
-export async function listReposByOwner(app: GhostDriveApp, ownerKey: string): Promise<RepoMeta[]> {
+export async function listReposByOwner(app: PeerHubApp, ownerKey: string): Promise<RepoMeta[]> {
 	await app.ready();
 	return (await app
 		.db!.find('@ghostdrive/repos-by-owner', { gte: { ownerKey }, lte: { ownerKey } })
@@ -70,7 +70,7 @@ export async function listReposByOwner(app: GhostDriveApp, ownerKey: string): Pr
 
 // Patch an existing catalog row (upsert on the same id).
 export async function updateRepo(
-	app: GhostDriveApp,
+	app: PeerHubApp,
 	id: string,
 	patch: Partial<RepoMeta>
 ): Promise<RepoMeta | null> {
@@ -91,7 +91,7 @@ export async function updateRepo(
 const FORK_TIMEOUT = 45_000;
 
 export async function forkRepo(
-	app: GhostDriveApp,
+	app: PeerHubApp,
 	source: { repoId: string; name: string; description?: string | null; driveKey: string }
 ): Promise<DriveSession> {
 	if (!source.driveKey || !/^[0-9a-f]{64}$/i.test(source.driveKey)) {

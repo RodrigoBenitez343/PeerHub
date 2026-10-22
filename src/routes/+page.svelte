@@ -149,7 +149,7 @@
 				<input
 					name="url"
 					required
-					placeholder="ghostdrive://..."
+					placeholder="peerhub://..."
 					class="border-border bg-bg-tertiary text-text-primary placeholder:text-text-muted focus:border-accent-dim mt-4 w-full rounded border px-3 py-2 font-mono text-xs outline-none"
 				/>
 				<div class="mt-5 flex justify-end gap-2">

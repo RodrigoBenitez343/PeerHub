@@ -26,9 +26,9 @@ jobs:
       - name: Package artifacts
         run: |
           cd out
-          tar -czf ghost-drive-${{ github.ref_name }}-darwin-arm64.tar.gz darwin-arm64/GhostDrive.app
-          tar -czf ghost-drive-${{ github.ref_name }}-android-arm64.tar.gz android-arm64/GhostDrive.apk
-      - run: gh release create ${{ github.ref_name }} out/ghost-drive-${{ github.ref_name }}-darwin-arm64.tar.gz out/ghost-drive-${{ github.ref_name }}-android-arm64.tar.gz --generate-notes
+          tar -czf peerhub-${{ github.ref_name }}-darwin-arm64.tar.gz darwin-arm64/PeerHub.app
+          tar -czf peerhub-${{ github.ref_name }}-android-arm64.tar.gz android-arm64/PeerHub.apk
+      - run: gh release create ${{ github.ref_name }} out/peerhub-${{ github.ref_name }}-darwin-arm64.tar.gz out/peerhub-${{ github.ref_name }}-android-arm64.tar.gz --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash

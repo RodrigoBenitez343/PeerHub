@@ -2,6 +2,7 @@
 	import type { PageData } from './$types';
 	import RepoHeader from '$lib/components/RepoHeader.svelte';
 	import Icon from '$lib/components/Icon.svelte';
+	import Markdown from '$lib/components/Markdown.svelte';
 
 	let { data }: { data: PageData } = $props();
 
@@ -225,8 +226,8 @@
 					{#if data.file.binary}
 						<p class="text-text-muted px-4 py-6 text-[11px]">Binary file — no preview.</p>
 					{:else if data.fileHtml !== null}
-						<article class="md px-4 py-4 md:px-6">
-							{@html data.fileHtml}
+						<article class="px-4 py-4 md:px-6">
+							<Markdown html={data.fileHtml} />
 						</article>
 					{:else}
 						{#if data.file.truncated}
@@ -310,9 +311,7 @@
 						<p class="text-text-muted mb-3 font-mono text-[9px] tracking-[2px] uppercase">
 							{data.readme.path}
 						</p>
-						<div class="md">
-							{@html data.readme.html}
-						</div>
+						<Markdown html={data.readme.html} />
 					</article>
 				{/if}
 

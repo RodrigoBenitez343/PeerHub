@@ -173,6 +173,18 @@ export const PUT: RequestHandler = async ({ locals, params, request }) => {
 		}
 	}
 
+	// A request with a Content-Length but no stream has already lost its body:
+	// SvelteKit builds such a Request without one when the client sent no
+	// Content-Type (browsers do that for files with no known MIME type). Writing
+	// it would store a 0-byte file and report success — refuse instead.
+	const declared = Number(request.headers.get('content-length') ?? 0);
+	if (declared > 0 && !(request as any).body) {
+		throw error(
+			400,
+			'Upload body was dropped before it reached the server: send a Content-Type header (application/octet-stream for binary files).'
+		);
+	}
+
 	try {
 		await session.putFile(filePath, readBody(request));
 	} catch (err: any) {

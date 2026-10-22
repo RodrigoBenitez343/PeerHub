@@ -1,9 +1,9 @@
 import { error } from '@sveltejs/kit';
 import b4a from 'b4a';
-import type GhostDriveApp from './app.js';
+import type PeerHubApp from './app.js';
 import type DriveSession from './session.js';
 
-type App = GhostDriveApp;
+type App = PeerHubApp;
 type Session = DriveSession;
 
 export interface SessionInfo {

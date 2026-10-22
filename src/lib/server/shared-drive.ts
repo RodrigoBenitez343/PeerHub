@@ -748,7 +748,7 @@ export default class SharedDrive extends DistributedDrive {
 						rpc.destroy();
 					} catch {}
 					reject(
-						new Error('Host does not accept shared writes (no response) — update Ghost Drive on it')
+						new Error('Host does not accept shared writes (no response) — update PeerHub on it')
 					);
 				}, OPEN_TIMEOUT);
 

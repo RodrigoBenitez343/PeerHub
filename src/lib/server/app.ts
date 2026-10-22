@@ -13,7 +13,7 @@ import { ensureDefaultProfile } from './users.js';
 import { registerRepo } from './repos.js';
 import { attachDirectory, broadcastAnnouncements } from './directory.js';
 
-interface GhostDriveAppOptions {
+interface PeerHubAppOptions {
 	dir?: string;
 	bootstrap?: unknown;
 }
@@ -31,7 +31,7 @@ export interface ParsedInvite {
 	metaKeyHex: string | null;
 }
 
-export default class GhostDriveApp extends ReadyResource {
+export default class PeerHubApp extends ReadyResource {
 	dir: string;
 	bootstrap: unknown;
 	store: Corestore | null;
@@ -41,7 +41,7 @@ export default class GhostDriveApp extends ReadyResource {
 	key: Buffer | null;
 	sessions: Map<string, DriveSession>;
 
-	constructor({ dir = '', bootstrap = null }: GhostDriveAppOptions = {}) {
+	constructor({ dir = '', bootstrap = null }: PeerHubAppOptions = {}) {
 		super();
 		this.dir = dir;
 		this.bootstrap = bootstrap;
@@ -219,6 +219,8 @@ export default class GhostDriveApp extends ReadyResource {
 
 	// --- Invites ---
 
+	// `peerhub://` is the current scheme. `ghostdrive://` links still parse, so an
+	// invite that was already sent keeps working after the rename.
 	encodeInvite(session: DriveSession): string {
 		const payload = JSON.stringify({
 			key: b4a.toString(session.drive!.key, 'hex'),
@@ -226,7 +228,7 @@ export default class GhostDriveApp extends ReadyResource {
 			name: session.name
 		});
 		return (
-			'ghostdrive://' +
+			'peerhub://' +
 			b4a
 				.toString(b4a.from(payload), 'base64')
 				.replace(/\+/g, '-')
@@ -236,8 +238,9 @@ export default class GhostDriveApp extends ReadyResource {
 	}
 
 	parseInvite(url: string): ParsedInvite {
-		if (!url.startsWith('ghostdrive://')) throw new Error('Invalid invite scheme');
-		const encoded = url.slice('ghostdrive://'.length);
+		const scheme = ['peerhub://', 'ghostdrive://'].find((candidate) => url.startsWith(candidate));
+		if (!scheme) throw new Error('Invalid invite scheme');
+		const encoded = url.slice(scheme.length);
 		const padded = encoded.replace(/-/g, '+').replace(/_/g, '/');
 		const obj = JSON.parse(b4a.toString(b4a.from(padded, 'base64')));
 		if (!obj.key || obj.key.length !== 64) throw new Error('Invalid invite payload');

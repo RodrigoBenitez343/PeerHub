@@ -10,12 +10,12 @@ import def from '../../../spec/hyperdb/index.js';
 import SharedDrive from './shared-drive.js';
 import SessionSync, { type SyncPairView, type SyncSummary } from './sync.js';
 import { invalidateEntries } from './loaders.js';
-import type GhostDriveApp from './app.js';
+import type PeerHubApp from './app.js';
 
 type Buf = Buffer | Uint8Array;
 
 interface DriveSessionOptions {
-	app: GhostDriveApp;
+	app: PeerHubApp;
 	id: string;
 	name: string;
 	icon?: Buf;
@@ -52,7 +52,7 @@ const META_WRITE_COLLECTIONS = new Set([
 ]);
 
 export default class DriveSession extends ReadyResource {
-	app: GhostDriveApp;
+	app: PeerHubApp;
 	id: string;
 	name: string;
 	icon: Buf;
@@ -176,6 +176,9 @@ export default class DriveSession extends ReadyResource {
 		if (this._remoteKey) {
 			driveOpts.key = this._remoteKey;
 		} else {
+			// Storage identity, not branding: the Hyperdrive key is derived from this
+			// corestore name, so renaming it would give every existing repo a new key
+			// and make its files unreachable.
 			driveOpts.name = 'ghost-drive/' + this.id;
 		}
 

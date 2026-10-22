@@ -162,6 +162,58 @@ body {
 .md .md-img {
 	max-width: 100%;
 	border-radius: 4px;
+	border: 1px solid var(--color-border);
+	background: var(--color-bg-secondary);
+}
+
+/* Lists nest, so the outer list must not fight the inner one's margins. */
+.md .md-list {
+	margin: 0.6em 0;
+	padding-left: 1.4em;
+}
+.md .md-list .md-list {
+	margin: 0.25em 0;
+}
+.md .md-list li {
+	margin: 0.2em 0;
+}
+.md .md-list > li::marker {
+	color: var(--color-text-muted);
+}
+.md .md-task {
+	margin-right: 0.35em;
+	accent-color: var(--color-accent);
+	vertical-align: middle;
+}
+
+/* Mermaid: the source stays visible until the client swaps in the diagram, and
+   stays visible if rendering fails (with the reason printed above it). */
+.md .md-mermaid {
+	background: var(--color-bg-secondary);
+	border: 1px solid var(--color-border);
+	border-radius: 6px;
+	overflow-x: auto;
+	padding: 0.9em;
+	margin: 1em 0;
+}
+.md .md-mermaid--done {
+	display: flex;
+	justify-content: center;
+	padding: 1.1em;
+}
+.md .md-mermaid--done svg {
+	max-width: 100%;
+	height: auto;
+}
+.md .md-mermaid--error {
+	border-color: var(--color-danger);
+}
+.md .md-mermaid-error {
+	color: var(--color-danger);
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.04em;
+	margin: 0.8em 0 0;
 }
 .md del {
 	color: var(--color-text-muted);

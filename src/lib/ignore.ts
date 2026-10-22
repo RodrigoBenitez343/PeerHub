@@ -138,6 +138,16 @@ export interface PickedFile {
 	webkitRelativePath?: string;
 }
 
+// Path of a picked file relative to the upload root. Folder picks carry the
+// folder's own name as the first segment; `stripRootFolder` removes it so the
+// contents land where the folder was picked from.
+export function pickedRelPath(file: PickedFile, stripRootFolder = false): string {
+	const rel = (file.webkitRelativePath || file.name).replace(/^\/+/, '');
+	if (!stripRootFolder) return rel;
+	const slash = rel.indexOf('/');
+	return slash === -1 ? file.name : rel.slice(slash + 1);
+}
+
 // Decides what a folder/file pick actually uploads.
 //
 // The repo's own .gitignore files (already stored) are not enough: a fresh
@@ -146,6 +156,11 @@ export interface PickedFile {
 // .gitignore contents are compiled together with the repo's rules — otherwise
 // `node_modules/` from the folder being uploaded would sail straight through.
 //
+// `stripRootFolder` is for folder picks: the picked directory is the repo (or
+// the current directory), not a directory *inside* it, so its own name is
+// dropped from every path. Picking `my-project` gives `/README.md`, not
+// `/my-project/README.md` — the same thing `git init` in that folder produces.
+//
 // The returned list puts .gitignore files first, shallowest first, so the
 // server-side guard in `PUT /api/files` also has the rules before the bytes
 // that they exclude arrive.
@@ -153,10 +168,11 @@ export async function planUpload<T extends PickedFile>(
 	files: T[],
 	dirPath: string,
 	repoSources: IgnoreSource[],
-	readText: (file: T) => Promise<string>
+	readText: (file: T) => Promise<string>,
+	options: { stripRootFolder?: boolean } = {}
 ): Promise<{ send: T[]; skipped: number; rules: number }> {
 	const inRoot = dirPath === '/' || dirPath === '';
-	const relOf = (file: T) => (file.webkitRelativePath || file.name).replace(/^\/+/, '');
+	const relOf = (file: T) => pickedRelPath(file, options.stripRootFolder);
 	const fullOf = (rel: string) => (inRoot ? `/${rel}` : `${dirPath}/${rel}`);
 
 	const entries = files.map((file) => ({ file, rel: relOf(file) }));

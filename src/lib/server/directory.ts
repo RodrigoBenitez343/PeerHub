@@ -2,7 +2,7 @@ import b4a from 'b4a';
 import Protomux from 'protomux';
 import RPC from 'protomux-rpc';
 import c from 'compact-encoding';
-import type GhostDriveApp from './app.js';
+import type PeerHubApp from './app.js';
 
 // Repo discovery without a server. Every peer joins one constant swarm topic
 // (app.ts) and, on each connection, exchanges the list of repos it hosts over a
@@ -35,13 +35,13 @@ const HEX64 = /^[0-9a-f]{64}$/i;
 // reconnect.
 const peers = new Set<any>();
 
-function selfHex(app: GhostDriveApp): string {
+function selfHex(app: PeerHubApp): string {
 	return app.key ? b4a.toString(app.key, 'hex') : '';
 }
 
 // What this peer hosts. Guests are skipped: re-announcing somebody else's repo
 // as your own would misattribute it.
-export async function ownAnnouncements(app: GhostDriveApp): Promise<Announcement[]> {
+export async function ownAnnouncements(app: PeerHubApp): Promise<Announcement[]> {
 	if (!app.db) return [];
 
 	const now = Date.now();
@@ -67,7 +67,7 @@ export async function ownAnnouncements(app: GhostDriveApp): Promise<Announcement
 
 // Only take the keys when the peer actually published them, and only when they
 // look like keys. Anything else is dropped instead of stored half-valid.
-function sanitize(app: GhostDriveApp, raw: any): Announcement | null {
+function sanitize(app: PeerHubApp, raw: any): Announcement | null {
 	if (!raw || typeof raw.peerKey !== 'string' || raw.peerKey === selfHex(app)) return null;
 	if (typeof raw.repoId !== 'string' || typeof raw.name !== 'string') return null;
 	if (!raw.repoId || !raw.name) return null;
@@ -93,7 +93,7 @@ function sanitize(app: GhostDriveApp, raw: any): Announcement | null {
 }
 
 export async function ingestAnnouncements(
-	app: GhostDriveApp,
+	app: PeerHubApp,
 	payload: string | Announcement[]
 ): Promise<number> {
 	if (!app.db) return 0;
@@ -121,7 +121,7 @@ export async function ingestAnnouncements(
 	return stored;
 }
 
-export async function listAnnouncements(app: GhostDriveApp): Promise<Announcement[]> {
+export async function listAnnouncements(app: PeerHubApp): Promise<Announcement[]> {
 	if (!app.db) return [];
 	const rows = (await app.db
 		.find('@ghostdrive/announcements', { gte: {}, lte: {} })
@@ -131,7 +131,7 @@ export async function listAnnouncements(app: GhostDriveApp): Promise<Announcemen
 
 // --- wire ---
 
-function respond(app: GhostDriveApp, rpc: any): void {
+function respond(app: PeerHubApp, rpc: any): void {
 	rpc.on('error', () => {});
 	rpc.respond('announce', opts, async () => JSON.stringify(await ownAnnouncements(app)));
 	rpc.respond('push', opts, async (payload: string) => {
@@ -140,7 +140,7 @@ function respond(app: GhostDriveApp, rpc: any): void {
 	});
 }
 
-function requestFrom(app: GhostDriveApp, rpc: any): void {
+function requestFrom(app: PeerHubApp, rpc: any): void {
 	const ask = () => {
 		rpc
 			.request('announce', '', opts)
@@ -154,7 +154,7 @@ function requestFrom(app: GhostDriveApp, rpc: any): void {
 // Called for every swarm connection. Exactly one side opens the channel (the
 // lexicographically smaller key) so both peers never open at once; the other
 // side accepts it through `pair`. Either way both sides ask for the list.
-export function attachDirectory(app: GhostDriveApp, conn: any): void {
+export function attachDirectory(app: PeerHubApp, conn: any): void {
 	let mux: any;
 	try {
 		mux = Protomux.from(conn);
@@ -187,7 +187,7 @@ export function attachDirectory(app: GhostDriveApp, conn: any): void {
 	track(app, rpc);
 }
 
-function track(app: GhostDriveApp, rpc: any): void {
+function track(app: PeerHubApp, rpc: any): void {
 	peers.add(rpc);
 	rpc.on('close', () => peers.delete(rpc));
 	respond(app, rpc);
@@ -195,7 +195,7 @@ function track(app: GhostDriveApp, rpc: any): void {
 }
 
 // Tell everyone we are connected to about our current repo list.
-export async function broadcastAnnouncements(app: GhostDriveApp): Promise<void> {
+export async function broadcastAnnouncements(app: PeerHubApp): Promise<void> {
 	if (peers.size === 0) return;
 	const payload = JSON.stringify(await ownAnnouncements(app));
 	for (const rpc of peers) {

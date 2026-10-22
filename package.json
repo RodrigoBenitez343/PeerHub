@@ -1,11 +1,10 @@
 {
-	"name": "ghost-drive",
-	"productName": "GhostDrive",
+	"name": "peerhub",
+	"productName": "PeerHub",
 	"version": "0.1.0",
 	"private": true,
 	"type": "module",
-	"description": "P2P file sharing with multi-drive sessions",
-	"upgrade": "pear://huqgaq6hxaqaf6chz5o6qmhc6funox861p6jdohji5uzotaawgjo",
+	"description": "Peer-to-peer code hosting: repositories, history, branches and forks with no server",
 	"imports": {
 		"#read-asset": {
 			"android": "./lib/read-asset.android.js",
@@ -43,8 +42,9 @@
 		"format": "prettier --write .",
 		"lint": "prettier --check .",
 		"test": "brittle-bare test/*.cjs",
-		"make:darwin-arm64": "bare-build --out out/ghost-drive-darwin-arm64 --host darwin-arm64 --icon ghost-icon.png --name GhostDrive --runtime bare-native/runtime build/index.js",
-		"make:android-arm64": "bare-build --out out/ghost-drive-android-arm64 --resources resources/android --host android-arm64 --manifest manifest.xml --identifier io.ghostdrive.app --name GhostDrive --runtime bare-native/runtime build/index.js",
+		"make:darwin-arm64": "bare-build --out out/peerhub-darwin-arm64 --host darwin-arm64 --icon ghost-icon.png --name PeerHub --runtime bare-native/runtime build/index.js",
+		"make:android-arm64": "bare-build --out out/peerhub-android-arm64 --resources resources/android --host android-arm64 --manifest manifest.xml --identifier io.peerhub.app --name PeerHub --runtime bare-native/runtime build/index.js",
+		"build:all": "npm run make:darwin-arm64 && npm run make:android-arm64",
 		"clean": "rm -rf out build .svelte-kit"
 	},
 	"devDependencies": {
@@ -99,6 +99,7 @@
 		"hyperschema": "^1.20.1",
 		"hyperswarm": "^4.17.0",
 		"localdrive": "^2.2.1",
+		"mermaid": "^12.2.0",
 		"paparam": "^1.10.1",
 		"protomux": "^3.10.3",
 		"protomux-rpc": "^1.9.0",

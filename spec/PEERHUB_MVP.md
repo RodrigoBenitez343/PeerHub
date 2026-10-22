@@ -605,6 +605,24 @@ branch page shows the same history → delete branch 303.
 - Rules only known to a _nested_ `.gitignore` that arrives inside the upload apply from that
   folder down, same as git. A rule in the root `.gitignore` of a picked folder applies to the
   whole `dirPath` it is uploaded into.
+- Folder picks upload their **contents**: `planUpload({ stripRootFolder: true })` drops the
+  picked folder's own name, so choosing `my-project` yields `/README.md`, not
+  `/my-project/README.md`. `pickedRelPath()` in `src/lib/ignore.ts` is the single place that
+  computes this, and the upload loop uses it for the request URL too — otherwise the filter
+  and the `PUT` would disagree about where the file goes.
+
+**Blank upload body (fixed)**
+
+- A `PUT` whose request carried a `Content-Length` but **no** `Content-Type` reached the route
+  with `request.body === undefined` and `request.arrayBuffer()` empty — so a 5-byte file was
+  stored as 0 bytes and answered `{ ok: true }`. Browsers omit `Content-Type` for files with no
+  mapped MIME type (`.bin`, `.ts`, `.gitignore`), so this was silent data loss on a normal
+  upload, not an exotic case.
+- Two-sided fix: `FileGrid` always sends `content-type: file.type || 'application/octet-stream'`,
+  and the route refuses a request that declares bytes but arrives without a body instead of
+  writing an empty file.
+- Verified by body-shape probe: Buffer/Blob/Uint8Array without a content type → `400`; the same
+  bytes with `application/octet-stream` → stored and read back byte-identical.
 
 **Verified**
 
@@ -635,3 +653,68 @@ branch page shows the same history → delete branch 303.
 - `forkRepo` copies whatever the source repo already stored, so it inherits the source's filtering
   but does not re-check rules.
 - Editing `.gitignore` inside the app means uploading it again; there is no editor UI.
+
+---
+
+## 14. Repo landing page + README rendering (implemented)
+
+**Routing**
+
+- `/drive/[id]` (Files) and `/drive/[id]/code` (Code, nothing selected) both render the root
+  README below the listing, the way a git host does. `load()` in `+page.server.ts` returns
+  `readme: { path, html } | null`; the Svelte side renders it with `Markdown.svelte`.
+- Detection is `src/lib/server/readme.ts` (`/^\/readme(\.md|\.markdown|\.mdown|\.txt)?$/i`,
+  first match after sorting by path length so `README.md` beats `README.markdown`). Only the
+  repo root is considered; subdirectories stay plain listings.
+
+**Link resolution**
+
+- `markdownOptions(session, baseDir)` returns the resolver pair used by `renderMarkdown`:
+  images → `/api/files/<repo>` (served from the shared drive with the right MIME), `.md` links
+  → the code viewer, other files → the preview page, extensionless paths → the directory
+  listing. `baseDir` comes from the rendered file's own directory, so a README under `docs/`
+  still resolves `./img/x.png` correctly.
+
+**Renderer** (`src/lib/markdown.ts`)
+
+- Escape-first: the source is HTML-escaped, then a fixed set of constructs is regex-converted.
+  Raw HTML in a README renders as text. `javascript:` / `data:` / `file:` targets are dropped,
+  links climbing above the repo root are reduced to their label.
+- Added in this pass: nested lists, task checkboxes, table alignment, reference-safe
+  `[![alt](img)](href)` nesting, autolinks, `__strong__`, title attributes, `~~~` fences,
+  mermaid fences, `resolveRepoPath()`.
+- Not implemented on purpose: raw HTML blocks, footnotes, reference-style links, setext
+  headings, syntax highlighting.
+
+**Mermaid** (`src/lib/components/Markdown.svelte`)
+
+- ```mermaid fences become `<pre class="md-mermaid"><code>…</code></pre>`; the component finds
+  them after render, lazily imports `mermaid` (12.2.0), and replaces the node with the SVG.
+- `securityLevel: 'strict'`, dark theme wired to the app palette, no network access. The SVG
+  output is parsed as XML, `script` elements and `on*` / `javascript:` attributes are stripped,
+  then the node is imported — no `innerHTML` assignment for the diagram.
+- A parse failure keeps the source visible, prints `mermaid: <reason>` above it and marks the
+  block with the danger colour. No silent blank box.
+
+**Verified**
+
+- Renderer unit pass (23 checks): headings, emphasis, inline code, strikethrough, resolved
+  image + title, resolved link with `#anchor`, nested list, task checkboxes, ordered list,
+  blockquote, table alignment, escaped code fence, mermaid placeholder, `javascript:` refused,
+  traversal link reduced to label, raw HTML escaped, `resolveRepoPath` cases (dotdot blocked,
+  relative, absolute), folder-strip planning.
+- HTTP + browser (demo repo with README, `docs/guide.md`, `img/logo.png`): README panel renders
+  under the grid and on the Code tab; heading/bold/emphasis applied; relative image loads from
+  `/api/files/<repo>/img/logo.png` (real 500×500 PNG, `naturalWidth` confirmed); the flow
+  diagram renders as SVG (`Start → Choice → Ship`) with no `mermaid:` error text; table cells
+  right-aligned as specified; root grid shows `docs/`, `img/`, `README.md` with **no wrapper
+  folder**; `?path=/docs` shows the plain listing with no README panel.
+
+**Gaps**
+
+- No syntax highlighting in code fences; the language is only carried as `data-lang`.
+- Mermaid ships as a large lazy chunk (~1 MB lazy, shared across every page that shows a
+  diagram). Acceptable for a desktop/mobile bundle, worth revisiting if it hurts first paint.
+- The README is re-read on every page load; there is no cache or ETag for it yet.
+- Relative links inside a _previewed_ file (not README) resolve the same way, but a link to a
+  directory opens the Files grid, not the Code tree.

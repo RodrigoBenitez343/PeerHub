@@ -4,6 +4,7 @@
 	import FileGrid from '$lib/components/FileGrid.svelte';
 	import LivePeerCount from '$lib/components/LivePeerCount.svelte';
 	import RepoHeader from '$lib/components/RepoHeader.svelte';
+	import Markdown from '$lib/components/Markdown.svelte';
 	import { invalidateAll } from '$app/navigation';
 
 	type Entry = { name: string; isFolder: boolean; cached?: boolean; size: number | null };
@@ -142,5 +143,30 @@
 				ignore={data.ignore}
 			/>
 		{/await}
+
+		{#if data.readme}
+			<article class="border-border mx-auto mt-2 max-w-4xl border-t px-4 py-6 md:px-6">
+				<div class="mb-4 flex items-center gap-2">
+					<svg
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="1.6"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						class="text-text-muted h-3.5 w-3.5"
+					>
+						<path d="M4 4h6l2 2h8v12H4z" />
+					</svg>
+					<a
+						href={`/drive/${drive.id}/code?path=${encodeURIComponent(data.readme.path)}`}
+						class="text-text-secondary hover:text-accent font-mono text-[10px] tracking-[2px] uppercase transition"
+					>
+						{data.readme.path.slice(1)}
+					</a>
+				</div>
+				<Markdown html={data.readme.html} />
+			</article>
+		{/if}
 	</section>
 {/await}

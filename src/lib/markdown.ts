@@ -1,6 +1,27 @@
-// Tiny Markdown renderer for README/file previews. No dependency, no raw HTML:
-// everything is escaped first, then a small set of constructs is converted, so
-// a repo can never inject markup into the app shell.
+// Markdown renderer for READMEs and file previews. No dependency for parsing,
+// no raw HTML: everything is escaped first, then a fixed set of constructs is
+// converted, so a repo can never inject markup into the app shell.
+//
+// Supported: ATX headings, paragraphs, emphasis/strong/strike, inline code,
+// fenced code (with a language tag), images, links, autolinks, ordered and
+// unordered lists with nesting and task checkboxes, tables, blockquotes,
+// horizontal rules.
+//
+// Not supported on purpose: raw HTML blocks, footnotes, reference-style links,
+// setext headings. If a README needs them, the escape-first design would have to
+// go, which is not worth the injection surface for a preview.
+//
+// Mermaid is emitted as `<pre class="md-mermaid">` and rendered on the client by
+// `Markdown.svelte`; the parser never executes anything.
+
+export interface MarkdownOptions {
+	/** Directory of the source file, so relative links resolve from the right place. */
+	baseDir?: string;
+	/** Map a repo path to a URL for `<img src>`. Return null to drop the image. */
+	imageHref?: (repoPath: string) => string | null;
+	/** Map a repo path (plus the original href) to a URL for `<a href>`. */
+	linkHref?: (repoPath: string, raw: string) => string | null;
+}
 
 function escapeHtml(input: string): string {
 	return input
@@ -10,36 +31,104 @@ function escapeHtml(input: string): string {
 		.replace(/"/g, '&quot;');
 }
 
-function safeHref(raw: string): string | null {
-	const href = raw.trim();
-	if (/^(https?:|mailto:)/i.test(href)) return href;
-	if (href.startsWith('/') || href.startsWith('#') || href.startsWith('./')) return href;
-	return null;
+const SAFE_ABSOLUTE = /^(https?:|mailto:)/i;
+
+// Turn a relative reference into a repo-absolute path, or null when it escapes
+// the repo root (a link to ../../etc is not something we should invent a URL for).
+export function resolveRepoPath(baseDir: string, target: string): string | null {
+	const clean = target.replace(/\\/g, '/').split('#')[0].split('?')[0];
+	if (!clean) return null;
+	const start = clean.startsWith('/') ? [] : baseDir.split('/').filter(Boolean);
+	const segments = clean.startsWith('/') ? [] : start;
+	for (const part of clean.replace(/^\//, '').split('/')) {
+		if (!part || part === '.') continue;
+		if (part === '..') {
+			if (segments.length === 0) return null;
+			segments.pop();
+			continue;
+		}
+		segments.push(part);
+	}
+	return '/' + segments.join('/');
 }
 
-function inline(text: string): string {
+interface Target {
+	href: string | null;
+	external: boolean;
+	label: string;
+}
+
+function resolveTarget(raw: string, opts: MarkdownOptions, kind: 'image' | 'link'): Target {
+	const href = raw.trim();
+	const external = SAFE_ABSOLUTE.test(href);
+
+	if (external) return { href, external: true, label: href };
+
+	// Anchors stay on the page; only an in-page reference is allowed through.
+	if (href.startsWith('#')) return { href, external: false, label: href };
+
+	// Anything with another scheme (javascript:, data:, file:) is refused.
+	if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return { href: null, external: false, label: href };
+
+	const repoPath = resolveRepoPath(opts.baseDir ?? '/', href);
+	if (!repoPath) return { href: null, external: false, label: href };
+
+	const mapped =
+		kind === 'image'
+			? (opts.imageHref?.(repoPath) ?? null)
+			: (opts.linkHref?.(repoPath, href) ?? null);
+
+	// Relative and no mapper: keep the reference as written (preview pages do this).
+	if (!mapped && !opts.imageHref && !opts.linkHref) {
+		return {
+			href: href.startsWith('/') || href.startsWith('./') ? href : href,
+			external: false,
+			label: href
+		};
+	}
+
+	return { href: mapped, external: false, label: href };
+}
+
+function inline(text: string, opts: MarkdownOptions = {}): string {
 	let out = escapeHtml(text);
 
-	// `code` first: its content must not be touched by the other rules.
+	// Inline code first: its content must not be touched by the other rules.
 	const codes: string[] = [];
 	out = out.replace(/`([^`]+)`/g, (_m, code: string) => {
 		codes.push(`<code class="md-code">${code}</code>`);
 		return `\u0000${codes.length - 1}\u0000`;
 	});
 
-	out = out.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt: string, src: string) => {
-		const href = safeHref(src);
-		return href ? `<img class="md-img" src="${href}" alt="${alt}" loading="lazy" />` : m;
-	});
+	// ![alt](src "title")
+	out = out.replace(
+		/!\[([^\]]*)\]\(\s*([^)\s]+)(?:\s+&quot;([^&]*)&quot;)?\s*\)/g,
+		(m, alt: string, src: string, title: string | undefined) => {
+			const target = resolveTarget(src, opts, 'image');
+			if (!target.href) return m;
+			const titleAttr = title ? ` title="${title}"` : '';
+			return `<img class="md-img" src="${target.href}" alt="${alt}"${titleAttr} loading="lazy" />`;
+		}
+	);
 
-	out = out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, label: string, href: string) => {
-		const safe = safeHref(href);
-		if (!safe) return m;
-		const external = /^https?:/i.test(safe) ? ' target="_blank" rel="noreferrer noopener"' : '';
-		return `<a class="md-link" href="${safe}"${external}>${label}</a>`;
+	// [label](href "title") — runs after images, so [![alt](src)](href) nests.
+	out = out.replace(
+		/\[([^\]]+)\]\(\s*([^)\s]+)(?:\s+&quot;([^&]*)&quot;)?\s*\)/g,
+		(m, label: string, href: string) => {
+			const target = resolveTarget(href, opts, 'link');
+			if (!target.href) return label;
+			const external = target.external ? ' target="_blank" rel="noreferrer noopener"' : '';
+			return `<a class="md-link" href="${target.href}"${external}>${label}</a>`;
+		}
+	);
+
+	// <https://example.com>
+	out = out.replace(/&lt;((?:https?:|mailto:)[^\s&]+)&gt;/gi, (_m, href: string) => {
+		return `<a class="md-link" href="${href}" target="_blank" rel="noreferrer noopener">${href}</a>`;
 	});
 
 	out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+	out = out.replace(/__([^_]+)__/g, '<strong>$1</strong>');
 	out = out.replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>');
 	out = out.replace(/(^|[\s(])_([^_\n]+)_/g, '$1<em>$2</em>');
 	out = out.replace(/~~([^~]+)~~/g, '<del>$1</del>');
@@ -52,7 +141,70 @@ function isTableDivider(line: string): boolean {
 	return /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(line) && line.includes('-');
 }
 
-export function renderMarkdown(source: string): string {
+const LIST_ITEM = /^(\s*)([-*+]|\d+\.)\s+(.*)$/;
+
+function isFence(line: string): RegExpMatchArray | null {
+	return line.match(/^\s*(`{3,}|~{3,})\s*([^\s`]*)?.*$/);
+}
+
+interface ListResult {
+	html: string;
+	next: number;
+}
+
+function parseList(lines: string[], start: number, opts: MarkdownOptions): ListResult {
+	const first = lines[start].match(LIST_ITEM)!;
+	const baseIndent = first[1].length;
+	const ordered = /^\d+\./.test(first[2]);
+	const items: string[] = [];
+
+	let i = start;
+	while (i < lines.length) {
+		const match = lines[i].match(LIST_ITEM);
+		if (!match) break;
+
+		const indent = match[1].length;
+		if (indent < baseIndent) break;
+		if (/^\d+\./.test(match[2]) !== ordered) break;
+
+		if (indent > baseIndent) {
+			// Deeper marker: belongs to the previous item as a nested list.
+			const nested = parseList(lines, i, opts);
+			if (items.length > 0) items[items.length - 1] += nested.html;
+			i = nested.next;
+			continue;
+		}
+
+		let body = match[3];
+		const task = body.match(/^\[([ xX])\]\s+(.*)$/);
+		if (task) {
+			const checked = task[1].trim() ? ' checked' : '';
+			body = `<input type="checkbox" class="md-task" disabled${checked} /> ${inline(task[2], opts)}`;
+		} else {
+			body = inline(body, opts);
+		}
+
+		i++;
+
+		// Continuation lines of the same item (indented, not a new marker).
+		while (i < lines.length && lines[i].trim() && !LIST_ITEM.test(lines[i]) && !isFence(lines[i])) {
+			const continuation = lines[i];
+			if (!/^\s{2,}/.test(continuation)) break;
+			body += ' ' + inline(continuation.trim(), opts);
+			i++;
+		}
+
+		items.push(body);
+	}
+
+	const tag = ordered ? 'ol' : 'ul';
+	return {
+		html: `<${tag} class="md-list">${items.map((item) => `<li>${item}</li>`).join('')}</${tag}>`,
+		next: i
+	};
+}
+
+export function renderMarkdown(source: string, opts: MarkdownOptions = {}): string {
 	const lines = source.replace(/\r\n?/g, '\n').split('\n');
 	const html: string[] = [];
 
@@ -61,7 +213,7 @@ export function renderMarkdown(source: string): string {
 
 	const flushParagraph = () => {
 		if (paragraph.length === 0) return;
-		html.push(`<p>${inline(paragraph.join(' '))}</p>`);
+		html.push(`<p>${inline(paragraph.join(' '), opts)}</p>`);
 		paragraph = [];
 	};
 
@@ -69,20 +221,27 @@ export function renderMarkdown(source: string): string {
 		const line = lines[i];
 
 		// fenced code
-		const fence = line.match(/^\s*```(\w*)\s*$/);
+		const fence = isFence(line);
 		if (fence) {
 			flushParagraph();
-			const lang = fence[1] || '';
+			const marker = fence[1];
+			const lang = (fence[2] || '').toLowerCase();
 			const body: string[] = [];
 			i++;
-			while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) {
+			while (i < lines.length && !new RegExp(`^\\s*${marker[0]}{3,}\\s*$`).test(lines[i])) {
 				body.push(lines[i]);
 				i++;
 			}
 			i++; // closing fence
-			html.push(
-				`<pre class="md-pre"><code${lang ? ` data-lang="${escapeHtml(lang)}"` : ''}>${escapeHtml(body.join('\n'))}</code></pre>`
-			);
+			const code = escapeHtml(body.join('\n'));
+			if (lang === 'mermaid') {
+				// Rendered by Markdown.svelte; the source stays visible if that fails.
+				html.push(`<pre class="md-mermaid"><code>${code}</code></pre>`);
+			} else {
+				html.push(
+					`<pre class="md-pre"><code${lang ? ` data-lang="${escapeHtml(lang)}"` : ''}>${code}</code></pre>`
+				);
+			}
 			continue;
 		}
 
@@ -91,7 +250,9 @@ export function renderMarkdown(source: string): string {
 		if (heading) {
 			flushParagraph();
 			const level = heading[1].length;
-			html.push(`<h${level} class="md-h md-h${level}">${inline(heading[2].trim())}</h${level}>`);
+			html.push(
+				`<h${level} class="md-h md-h${level}">${inline(heading[2].trim(), opts)}</h${level}>`
+			);
 			i++;
 			continue;
 		}
@@ -114,6 +275,18 @@ export function renderMarkdown(source: string): string {
 					.split('|')
 					.map((cell) => cell.trim());
 			const head = split(line);
+			const align = split(lines[i + 1]).map((cell) => {
+				const left = cell.startsWith(':');
+				const right = cell.endsWith(':');
+				if (left && right) return 'center';
+				if (right) return 'right';
+				if (left) return 'left';
+				return '';
+			});
+			const cell = (tag: 'th' | 'td', text: string, index: number) => {
+				const style = align[index] ? ` style="text-align:${align[index]}"` : '';
+				return `<${tag}${style}>${inline(text, opts)}</${tag}>`;
+			};
 			i += 2;
 			const rows: string[][] = [];
 			while (i < lines.length && lines[i].includes('|')) {
@@ -122,10 +295,12 @@ export function renderMarkdown(source: string): string {
 			}
 			html.push(
 				'<div class="md-table-wrap"><table class="md-table"><thead><tr>' +
-					head.map((cell) => `<th>${inline(cell)}</th>`).join('') +
+					head.map((text, index) => cell('th', text, index)).join('') +
 					'</tr></thead><tbody>' +
 					rows
-						.map((row) => '<tr>' + row.map((cell) => `<td>${inline(cell)}</td>`).join('') + '</tr>')
+						.map(
+							(row) => '<tr>' + row.map((text, index) => cell('td', text, index)).join('') + '</tr>'
+						)
 						.join('') +
 					'</tbody></table></div>'
 			);
@@ -140,25 +315,16 @@ export function renderMarkdown(source: string): string {
 				body.push(lines[i].replace(/^\s*>\s?/, ''));
 				i++;
 			}
-			html.push(`<blockquote class="md-quote">${inline(body.join(' '))}</blockquote>`);
+			html.push(`<blockquote class="md-quote">${inline(body.join(' '), opts)}</blockquote>`);
 			continue;
 		}
 
-		// lists (single level, nesting by indentation groups)
-		if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
+		// lists, with nesting and task checkboxes
+		if (LIST_ITEM.test(line)) {
 			flushParagraph();
-			const ordered = /^\s*\d+\.\s+/.test(line);
-			const items: string[] = [];
-			while (i < lines.length && /^\s*([-*+]|\d+\.)\s+/.test(lines[i])) {
-				items.push(lines[i].replace(/^\s*([-*+]|\d+\.)\s+/, ''));
-				i++;
-			}
-			const tag = ordered ? 'ol' : 'ul';
-			html.push(
-				`<${tag} class="md-list">` +
-					items.map((item) => `<li>${inline(item)}</li>`).join('') +
-					`</${tag}>`
-			);
+			const list = parseList(lines, i, opts);
+			html.push(list.html);
+			i = list.next;
 			continue;
 		}
 
