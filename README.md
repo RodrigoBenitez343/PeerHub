@@ -107,7 +107,7 @@ Rule of thumb: `src/lib/server/**` never imports a component or a `$app/*` modul
 | **Branches**     | Create from an existing branch, switch, delete (default branch protected).                                                                                                                      |
 | **Forks**        | Fork a public repo: it mirrors the drive into a new repo you own and keeps the source attribution.                                                                                              |
 | **Explore**      | Search every repo this device owns or opened, plus everything other peers announced. Filters for yours / public / private.                                                                      |
-| **Public repos** | Open a read-only mirror with no invite. Private repos show by name only and need an invite link.                                                                                                |
+| **Public repos** | The public catalogue: your own public repos and everything peers announced. Open a peer's repo as a read-only mirror; private ones show by name only and need an invite link.                   |
 | **Uploads**      | Files or whole folders from any peer. Picking a folder uploads its **contents** into the current directory (no wrapper folder), and `.gitignore` is honoured on both ends.                      |
 | **Local sync**   | Link a folder on disk. One-way by default (repo → folder); two-way is opt-in per folder, and even then the newer copy wins per file.                                                            |
 | **Terminal CLI** | Work on a linked folder like a git checkout while the app runs: `status`, `commit`, `log`, `show`, `restore`, `sync`, `direction`, `auto on/off`.                                               |
@@ -263,8 +263,18 @@ gap list.
   against a collection allowlist (`META_WRITE_COLLECTIONS` in `session.ts`). File writes go
   the same way; a guest that is offline can only read its cache.
 - **Discovery** — every peer joins one constant swarm topic and exchanges the list of repos
-  it hosts (`directory.ts`). That list is what the Explore tab reads. Public repos advertise
-  their drive and metadata keys; private ones advertise only name/description.
+  it hosts (`directory.ts`). That list is what the home page and the Explore tab read. Public
+  repos advertise their drive and metadata keys; private ones advertise only name/description.
+  Creating or deleting a repo pushes the full list to connected peers immediately, and the list
+  is treated as authoritative for that peer — a deleted repo is retired on the other side
+  rather than lingering.
+
+  Discovery needs a DHT lookup, and the boot lookup only finds peers that had **already**
+  announced, so two peers started together usually miss each other at first. The app therefore
+  re-announces after 8 s and 25 s, every 60 s afterwards, and whenever you press **Refresh
+  peers** (which also re-runs the lookup). The home page shows how many peers are on the
+  network, so an empty catalogue is explainable instead of mysterious.
+
 - **Git layer** — hyperdrive stores the _current_ tree, not history. `git.ts` builds one
   digest per path, and a commit is a record of that snapshot plus parent and message. Branch
   refs are pointers into that DAG. (No tags yet.)

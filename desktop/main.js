@@ -30,6 +30,14 @@ let server = null;
 let win = null;
 let origin = null;
 
+// adapter-node derives `url.origin` from the request headers and assumes **https**
+// when PROTOCOL_HEADER is unset. Everything here is plain HTTP on loopback, so
+// without this SvelteKit believes every request is `https://127.0.0.1:<port>`;
+// its CSRF check then rejects every form POST (and every `text/plain` PUT) as
+// cross-site. Must be set before `build/handler.js` is imported: the header name
+// is read once, at module load.
+process.env.PROTOCOL_HEADER = 'x-forwarded-proto';
+
 app.setName('PeerHub');
 
 // --- server ---------------------------------------------------------------
@@ -38,6 +46,9 @@ async function startServer() {
 	const { handler } = await import(pathToFileURL(path.join(root, 'build', 'handler.js')).href);
 
 	server = http.createServer((req, res) => {
+		// Forced, not defaulted: the loopback server never speaks TLS, and a client
+		// must not be able to claim another scheme to shift `url.origin`.
+		req.headers['x-forwarded-proto'] = 'http';
 		handler(req, res, () => {
 			res.statusCode = 404;
 			res.end('Not found');
@@ -195,9 +206,28 @@ async function runSmoke() {
 		const res = await fetch(`${origin}/`);
 		const html = await res.text();
 		const title = /<title>([^<]*)<\/title>/.exec(html)?.[1] ?? '';
+
+		// A GET alone does not prove the app is usable: the CSRF check only runs on
+		// mutating requests, and an origin mismatch breaks every form in the UI
+		// while the home page still renders. `?/refresh` is a real action that
+		// mutates nothing, so this asserts the full POST path is intact.
+		const post = await fetch(`${origin}/?/refresh`, {
+			method: 'POST',
+			headers: {
+				origin,
+				'content-type': 'application/x-www-form-urlencoded',
+				accept: 'application/json'
+			},
+			body: ''
+		});
+		const postBody = await post.text();
+
 		console.log(`[smoke] ${res.status} ${origin} title="${title}" bytes=${html.length}`);
+		console.log(`[smoke] POST ?/refresh -> ${post.status} ${postBody.slice(0, 120)}`);
+
+		const ok = res.ok && title.includes('PeerHub') && post.status === 200;
 		stopServer();
-		app.exit(res.ok && title.includes('PeerHub') ? 0 : 1);
+		app.exit(ok ? 0 : 1);
 	} catch (err) {
 		fail(err);
 	}

@@ -1,7 +1,12 @@
 import type { Actions, PageServerLoad } from './$types';
 import { fail, redirect } from '@sveltejs/kit';
 import { listRepoMeta, forkRepo } from '$lib/server/repos';
-import { broadcastAnnouncements, listAnnouncements } from '$lib/server/directory';
+import {
+	broadcastAnnouncements,
+	directoryPeerCount,
+	listAnnouncements,
+	refreshAnnouncements
+} from '$lib/server/directory';
 import { selfKeyHex } from '$lib/server/users';
 
 // Home = repo dashboard: your repos, the public repos other peers announced, and
@@ -10,8 +15,13 @@ import { selfKeyHex } from '$lib/server/users';
 const HEX64 = /^[0-9a-f]{64}$/i;
 
 export const load: PageServerLoad = async ({ locals }) => {
-	if (!locals.app) return { repos: [], publicRepos: [], selfKey: '' };
+	if (!locals.app) return { repos: [], publicRepos: [], selfKey: '', peers: 0 };
 	await locals.app.ready();
+
+	// Ask connected peers for their lists in the background: an announcement that
+	// was missed (peer came back, push lost) shows up on the next render instead
+	// of waiting for the Refresh button.
+	refreshAnnouncements(locals.app).catch(() => {});
 
 	const catalog = await listRepoMeta(locals.app);
 	const announcements = await listAnnouncements(locals.app);
@@ -35,28 +45,68 @@ export const load: PageServerLoad = async ({ locals }) => {
 		.filter((repo): repo is NonNullable<typeof repo> => !!repo)
 		.sort((a, b) => a.name.localeCompare(b.name));
 
-	// Announcements we already opened show up under "your repositories" instead.
-	const openedKeys = new Set<string>();
+	// A repo you already opened stays in the public list, marked as opened: making
+	// it vanish looked like the list was losing entries. The drive key is what
+	// both sides agree on.
+	const openedByDriveKey = new Map<string, string>();
 	for (const session of sessions.values()) {
-		if (session.drive?.key) openedKeys.add(session.drive.key.toString('hex'));
+		if (session.drive?.key) {
+			openedByDriveKey.set(session.drive.key.toString('hex'), session.id as string);
+		}
 	}
 
-	const publicRepos = announcements
-		.filter((entry) => !openedKeys.has(entry.driveKey ?? ''))
-		.map((entry) => ({
-			peerKey: entry.peerKey,
-			owner: entry.peerKey.slice(0, 8),
-			repoId: entry.repoId,
-			name: entry.name,
-			description: entry.description,
-			visibility: entry.visibility,
-			defaultBranch: entry.defaultBranch,
-			driveKey: entry.driveKey,
-			metaKey: entry.metaKey,
-			openable: entry.visibility === 'public' && !!entry.driveKey
-		}));
+	// The public catalogue is "every public repo this peer knows about": your own
+	// public repos first, then what peers announced. Leaving your own out made the
+	// section look empty on a single machine, where nobody else can announce.
+	const ownPublic = repos.filter((repo) => !repo.isGuest && repo.visibility === 'public');
+	const ownDriveKeys = new Set<string>();
+	for (const repo of ownPublic) {
+		const session = sessions.get(repo.id);
+		if (session?.drive?.key) ownDriveKeys.add(session.drive.key.toString('hex'));
+	}
 
-	return { repos, publicRepos, selfKey: selfKeyHex(locals.app).slice(0, 8) };
+	const publicRepos = [
+		...ownPublic.map((repo) => ({
+			key: `own:${repo.id}`,
+			name: repo.name,
+			description: repo.description,
+			visibility: repo.visibility,
+			owner: 'you',
+			defaultBranch: repo.defaultBranch,
+			ownId: repo.id as string | null,
+			openedId: null as string | null,
+			driveKey: null as string | null,
+			metaKey: null as string | null,
+			peerKey: '',
+			repoId: repo.id,
+			openable: false
+		})),
+		...announcements
+			// Something already in "your repositories" is not listed as a stranger's.
+			.filter((entry) => !entry.driveKey || !ownDriveKeys.has(entry.driveKey))
+			.map((entry) => ({
+				key: `${entry.peerKey}:${entry.repoId}`,
+				name: entry.name,
+				description: entry.description,
+				visibility: entry.visibility,
+				owner: entry.peerKey.slice(0, 8),
+				defaultBranch: entry.defaultBranch,
+				ownId: null as string | null,
+				openedId: entry.driveKey ? (openedByDriveKey.get(entry.driveKey) ?? null) : null,
+				driveKey: entry.driveKey,
+				metaKey: entry.metaKey,
+				peerKey: entry.peerKey,
+				repoId: entry.repoId,
+				openable: entry.visibility === 'public' && !!entry.driveKey
+			}))
+	];
+
+	return {
+		repos,
+		publicRepos,
+		selfKey: selfKeyHex(locals.app).slice(0, 8),
+		peers: directoryPeerCount(locals.app)
+	};
 };
 
 export const actions: Actions = {
@@ -155,7 +205,11 @@ export const actions: Actions = {
 	},
 
 	refresh: async ({ locals }) => {
-		await broadcastAnnouncements(locals.app);
+		// Discovery first: the initial DHT lookup only found peers that had already
+		// announced, so this is what actually connects two peers that were both
+		// running when they missed each other. Then exchange the lists.
+		await locals.app.refreshDirectory().catch(() => {});
+		await Promise.all([broadcastAnnouncements(locals.app), refreshAnnouncements(locals.app)]);
 		return { error: undefined };
 	}
 };

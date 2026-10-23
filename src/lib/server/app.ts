@@ -43,6 +43,17 @@ export default class PeerHubApp extends ReadyResource {
 	sessions: Map<string, DriveSession>;
 	/** Shared secret the local CLI must present; see ensureCliToken(). */
 	cliToken: string | null;
+	/** Swarm discovery for the directory topic, so the list can be refreshed. */
+	private directory: any;
+	private directoryTimer: ReturnType<typeof setInterval> | null;
+	private directoryWarmup: Array<ReturnType<typeof setTimeout>>;
+	/**
+	 * Open directory channels. Lives on the app, not in a module variable: the
+	 * route bundle and the app bundle get their own copy of a module, so a module
+	 * level Set here would be empty on the page side and every peer to peer
+	 * exchange would be skipped as "no peers".
+	 */
+	directoryPeers: Set<any>;
 
 	constructor({ dir = '', bootstrap = null }: PeerHubAppOptions = {}) {
 		super();
@@ -55,6 +66,10 @@ export default class PeerHubApp extends ReadyResource {
 		this.key = null;
 		this.sessions = new Map();
 		this.cliToken = null;
+		this.directory = null;
+		this.directoryTimer = null;
+		this.directoryWarmup = [];
+		this.directoryPeers = new Set();
 	}
 
 	protected async _open(): Promise<void> {
@@ -91,10 +106,32 @@ export default class PeerHubApp extends ReadyResource {
 		// A constant topic so any PeerHub peer can discover and replicate profiles.
 		// The `users` collection lives in the root ghost-db bee, which the connection
 		// handler above already replicates — joining the topic just finds the peers.
+		//
+		// The first lookup races the other peer's announce (two peers started at the
+		// same time can miss each other and never retry), so discovery is refreshed
+		// periodically and on demand — see refreshDirectory().
 		const dirTopic = b4a.alloc(32);
 		crypto_generichash(dirTopic, b4a.from('ghostdrive/directory'));
-		this.swarm.join(dirTopic);
+		this.directory = this.swarm.join(dirTopic);
 		log('directory topic joined', b4a.toString(dirTopic, 'hex').slice(0, 12));
+
+		const refreshMs = Number(process.env.PEERHUB_DISCOVERY_REFRESH_MS ?? 60_000);
+		if (refreshMs > 0) {
+			this.directoryTimer = setInterval(() => {
+				this.refreshDirectory().catch(() => {});
+			}, refreshMs);
+			// Never a reason to keep the process alive on its own.
+			this.directoryTimer.unref?.();
+		}
+
+		// The boot lookup only finds peers that had already announced — two peers
+		// started together usually miss each other. Two short retries make the mesh
+		// form in seconds instead of waiting for the periodic refresh.
+		for (const delay of [8_000, 25_000]) {
+			const timer = setTimeout(() => this.refreshDirectory().catch(() => {}), delay);
+			timer.unref?.();
+			this.directoryWarmup.push(timer);
+		}
 
 		await ensureDefaultProfile(this);
 		log('default profile ensured');
@@ -128,6 +165,12 @@ export default class PeerHubApp extends ReadyResource {
 	}
 
 	protected async _close(): Promise<void> {
+		if (this.directoryTimer) {
+			clearInterval(this.directoryTimer);
+			this.directoryTimer = null;
+		}
+		for (const timer of this.directoryWarmup) clearTimeout(timer);
+		this.directoryWarmup = [];
 		for (const session of this.sessions.values()) {
 			try {
 				await session.close();
@@ -140,6 +183,27 @@ export default class PeerHubApp extends ReadyResource {
 	}
 
 	// --- Session CRUD ---
+
+	/**
+	 * Re-announce and look up the directory topic. Called periodically and by the
+	 * "Refresh peers" button, because the initial DHT lookup only sees peers that
+	 * had already announced at that moment.
+	 */
+	async refreshDirectory(timeoutMs = 8000): Promise<void> {
+		const discovery = this.directory;
+		if (!discovery?.refresh) return;
+
+		await new Promise<void>((resolve) => {
+			const timer = setTimeout(resolve, timeoutMs);
+			timer.unref?.();
+			Promise.resolve(discovery.refresh({ client: true, server: true }))
+				.catch(() => {})
+				.then(() => {
+					clearTimeout(timer);
+					resolve();
+				});
+		});
+	}
 
 	async createSession({
 		name,
@@ -167,7 +231,10 @@ export default class PeerHubApp extends ReadyResource {
 		await session.ready();
 		this.sessions.set(id, session);
 		await registerRepo(this, session, { description, visibility, defaultBranch });
-		broadcastAnnouncements(this).catch(() => {});
+		// Awaited: the create action redirects straight into the new repo, so a peer
+		// that is already connected should have the announcement before that page
+		// loads. Bounded by a timeout inside, so a slow peer cannot stall the form.
+		await broadcastAnnouncements(this).catch(() => {});
 		return session;
 	}
 
@@ -209,6 +276,10 @@ export default class PeerHubApp extends ReadyResource {
 		await this.db!.flush();
 		await session.close();
 		this.sessions.delete(id);
+
+		// Peers treat a push as our complete list, so this retires the announcement
+		// instead of leaving the repo listed as public forever.
+		await broadcastAnnouncements(this).catch(() => {});
 	}
 
 	listSessions(): SessionInfo[] {

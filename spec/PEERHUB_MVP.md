@@ -900,3 +900,79 @@ resources/      icon.png (256+), icon.ico (committed, multi-size  electron-build
 **Why not Neutralino/Tauri as the first shell:** both need the server as a sidecar process,
 because neither embeds a JS runtime. Electron embeds Node, so the server runs in the main process
 with no extra binary, no port handshake and no orphaned child on a hard kill.
+
+---
+
+## 18. Packaged app: create did nothing, public list empty (fixed)
+
+Reported against the **installed** build: creating a repo did nothing, and the public section did
+not list every public repo. Four separate defects, all in production only or in discovery.
+
+**1. Every form POST was rejected (the reason create did nothing)**
+
+- `@sveltejs/adapter-node` derives `event.url.origin` from the request headers and assumes
+  **https** when `PROTOCOL_HEADER` is unset (`get_origin()` in `files/handler.js`). The desktop
+  window talks to `http://127.0.0.1:<port>`, so SvelteKit saw `https://127.0.0.1:<port>`.
+- Its CSRF check (`respond.js`, `!__SVELTEKIT_DEV__` only) compares the `origin` header against
+  `url.origin` and refuses form posts on POST/PUT/PATCH/DELETE with a form content type. Result:
+  every create / join / open / fork / refresh / commit / settings action returned
+  `403 Cross-site POST form submissions are forbidden`, and so did every upload of a
+  `text/plain` file. The home page still rendered, which is why it looked like "nothing happens".
+- Dev mode never reproduces it: Vite builds the URL from the real request.
+- **Fix** (`desktop/main.js`): set `PROTOCOL_HEADER=x-forwarded-proto` **before** importing
+  `build/handler.js` (the header name is read once, at module load) and force
+  `req.headers['x-forwarded-proto'] = 'http'` on every request. Forced, not defaulted, so a
+  client cannot claim another scheme to shift `url.origin`.
+- **Regression guard**: `desktop/main.js --smoke` now also POSTs to `/?/refresh` (a real action
+  that mutates nothing) and requires `200`, so CI fails if the POST path breaks again. A GET-only
+  smoke test cannot catch this class of bug.
+
+**2. The peer registry lived in module scope**
+
+- `directory.ts` kept open channels in a module-level `Set`. The route bundle and the app bundle
+  each get their own copy of a module, so the home page counted an **empty** set while
+  `app.ts` held real channels: "Refresh peers" was a no-op and the peer count always read 0.
+- **Fix**: the set moved onto the instance (`PeerHubApp.directoryPeers`), and every helper takes
+  `app`. Anything shared between `app.ts` and a route must live on the app, never in a module.
+
+**3. Announcements were write-only**
+
+- `push` sent a bare array with no sender, so a repo a peer deleted stayed in our list forever.
+- **Fix**: `push` now carries `{ peerKey, repos }`. The list is authoritative for that sender, so
+  anyone whose repos are absent is pruned (`ingestAnnouncements`). A bare array (older peer) is
+  still accepted and merged, never pruned. `removeSession()` re-broadcasts, so a delete retires
+  the entry on every connected peer.
+- `createSession()` now **awaits** the broadcast (bounded by a 1.5 s timeout per send), so a repo
+  created by the user has reached connected peers before the page navigates.
+
+**4. Discovery raced the other peer's announce**
+
+- `swarm.join(topic)` announces and looks up once. Two peers started together look up before the
+  other has announced, miss each other, and (on this network) can stay disconnected for minutes.
+- **Fix** (`app.ts`): keep the discovery session, re-announce at 8 s and 25 s after boot, then
+  every 60 s (`PEERHUB_DISCOVERY_REFRESH_MS`, `0` disables). `refreshDirectory()` is also awaited
+  by the **Refresh peers** action â€” pressing it re-announces and re-runs the lookup instead of
+  only repeating an RPC over an already-broken channel. Note that a refresh aborts an in-flight
+  lookup, so a tight retry loop is counter-productive; one press, then wait.
+- The home page shows `N peers on the network` and explains the empty state, so "no public repos"
+  is distinguishable from "no peers".
+
+**5. Your own public repos were missing from the catalogue**
+
+- The section only listed announcements, which by definition excludes the repos this peer hosts â€”
+  on a single machine it could never be non-empty. It now starts with your public repos (marked
+  `yours`) followed by peers' announcements, and a repo already opened as a mirror stays listed
+  (`opened Â· mirror`) instead of vanishing when opened.
+
+**Verified**
+
+- Node-level, production build: before the fix `POST /?refresh`, `POST ?/create` and
+  `PUT (text/plain)` all return `403`; after it `200`, `303 â†’ /drive/<id>/code`, and
+  `404` (CSRF passed, drive missing).
+- Two peers, two data dirs, same machine: create on A â†’ B shows `Public repositories Â· 1` with
+  A's key, opens it as a mirror, and when A deletes it B drops the entry while keeping its own
+  mirror. 14/14 assertions.
+- Packaged app: `dist/win-unpacked/PeerHub.exe --smoke` â†’ `200 title="PeerHub"` and
+  `POST ?/refresh -> 200` (exit 0).
+- This peer's real data dir: `Your repositories Â· 1`, `Public repositories Â· 1` (own, `yours`),
+  `0 peers on the network`, and the form POST answered `200`.

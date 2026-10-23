@@ -34,10 +34,6 @@ export interface Announcement {
 
 const HEX64 = /^[0-9a-f]{64}$/i;
 
-// Live channels, so a newly created repo can be pushed without waiting for a
-// reconnect.
-const peers = new Set<any>();
-
 function selfHex(app: PeerHubApp): string {
 	return app.key ? b4a.toString(app.key, 'hex') : '';
 }
@@ -97,22 +93,33 @@ function sanitize(app: PeerHubApp, raw: any): Announcement | null {
 	};
 }
 
+export interface PushEnvelope {
+	peerKey?: string;
+	repos?: unknown;
+}
+
 export async function ingestAnnouncements(
 	app: PeerHubApp,
-	payload: string | Announcement[]
+	payload: string | Announcement[] | PushEnvelope
 ): Promise<number> {
 	if (!app.db) return 0;
 
-	let list: any[];
-	if (typeof payload === 'string') {
-		try {
-			const parsed = JSON.parse(payload);
-			list = Array.isArray(parsed) ? parsed : [];
-		} catch {
-			return 0;
-		}
-	} else {
-		list = Array.isArray(payload) ? payload : [];
+	const parsed = (typeof payload === 'string' ? safeParse(payload) : payload) as
+		Announcement[] | PushEnvelope | null;
+	let list: any[] = [];
+	let sender: string | null = null;
+
+	if (Array.isArray(parsed)) {
+		list = parsed;
+	} else if (parsed && typeof parsed === 'object') {
+		// Envelope form. The list is the sender's complete current set, which is
+		// what lets a deleted repo disappear here instead of lingering forever.
+		const envelope = parsed as PushEnvelope;
+		list = Array.isArray(envelope.repos) ? (envelope.repos as any[]) : [];
+		sender =
+			typeof envelope.peerKey === 'string' && HEX64.test(envelope.peerKey)
+				? envelope.peerKey
+				: null;
 	}
 
 	let stored = 0;
@@ -124,7 +131,24 @@ export async function ingestAnnouncements(
 		accepted.push(record);
 		stored++;
 	}
-	if (stored > 0) await app.db.flush();
+
+	// The sender's list is authoritative for the sender: drop the repos it no
+	// longer hosts. A bare array carries no sender, so it is merged only.
+	if (sender && sender !== selfHex(app)) {
+		const live = new Set(accepted.map((record) => record.repoId));
+		const known = (await app.db
+			.find('@ghostdrive/announcements', { gte: { peerKey: sender }, lte: { peerKey: sender } })
+			.toArray()) as Announcement[];
+		for (const row of known) {
+			if (live.has(row.repoId)) continue;
+			await app.db.delete('@ghostdrive/announcements', {
+				peerKey: row.peerKey,
+				repoId: row.repoId
+			});
+		}
+	}
+
+	if (stored > 0 || sender) await app.db.flush();
 
 	// A connected peer that mirrors this repo should notice a policy change
 	// without reconnecting. Matched by drive key, which only public repos
@@ -139,6 +163,14 @@ export async function ingestAnnouncements(
 	}
 
 	return stored;
+}
+
+function safeParse(payload: string): unknown {
+	try {
+		return JSON.parse(payload);
+	} catch {
+		return null;
+	}
 }
 
 export async function listAnnouncements(app: PeerHubApp): Promise<Announcement[]> {
@@ -208,18 +240,55 @@ export function attachDirectory(app: PeerHubApp, conn: any): void {
 }
 
 function track(app: PeerHubApp, rpc: any): void {
-	peers.add(rpc);
-	rpc.on('close', () => peers.delete(rpc));
+	app.directoryPeers.add(rpc);
+	rpc.on('close', () => app.directoryPeers.delete(rpc));
 	respond(app, rpc);
 	requestFrom(app, rpc);
 }
 
-// Tell everyone we are connected to about our current repo list.
-export async function broadcastAnnouncements(app: PeerHubApp): Promise<void> {
-	if (peers.size === 0) return;
-	const payload = JSON.stringify(await ownAnnouncements(app));
-	for (const rpc of peers) {
-		if (!rpc.opened) continue;
-		rpc.request('push', payload, opts).catch(() => {});
-	}
+// Tell everyone we are connected to about our current repo list, and wait for
+// the deliveries — a repo the user just created should reach connected peers
+// before the page navigates. The timer keeps a slow peer from holding a page
+// action hostage.
+export async function broadcastAnnouncements(app: PeerHubApp, timeoutMs = 1500): Promise<void> {
+	const channels = [...app.directoryPeers].filter((rpc) => rpc.opened);
+	if (channels.length === 0) return;
+
+	const list = await ownAnnouncements(app);
+	const payload = JSON.stringify({ peerKey: selfHex(app), repos: list });
+	const sends = channels.map((rpc) => rpc.request('push', payload, opts).catch(() => {}));
+	await settleWithTimeout(sends, timeoutMs);
+}
+
+// Ask every connected peer for its list now. Used by the home page (cheap,
+// fire-and-forget) and by the Refresh button (awaited, so the reply is already
+// stored when the page reloads).
+export async function refreshAnnouncements(app: PeerHubApp, timeoutMs = 2000): Promise<void> {
+	const channels = [...app.directoryPeers].filter((rpc) => rpc.opened);
+	if (channels.length === 0) return;
+
+	const sends = channels.map((rpc) =>
+		rpc
+			.request('announce', '', opts)
+			.then((reply: string) => ingestAnnouncements(app, reply))
+			.catch(() => {})
+	);
+	await settleWithTimeout(sends, timeoutMs);
+}
+
+/** Peers currently reachable on the directory channel. */
+export function directoryPeerCount(app: PeerHubApp): number {
+	return app.directoryPeers.size;
+}
+
+async function settleWithTimeout(sends: Array<Promise<unknown>>, timeoutMs: number): Promise<void> {
+	if (sends.length === 0) return;
+	await new Promise<void>((resolve) => {
+		const timer = setTimeout(resolve, timeoutMs);
+		timer.unref?.();
+		Promise.allSettled(sends).then(() => {
+			clearTimeout(timer);
+			resolve();
+		});
+	});
 }

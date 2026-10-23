@@ -250,29 +250,65 @@
 			</section>
 
 			<section>
-				<h2 class="text-text-muted mb-2 font-mono text-[10px] tracking-[3px] uppercase">
-					Public repositories · {data.publicRepos.length}
+				<h2
+					class="text-text-muted mb-2 flex flex-wrap items-center gap-2 font-mono text-[10px] tracking-[3px] uppercase"
+				>
+					<span>Public repositories · {data.publicRepos.length}</span>
+					<span class:text-accent={data.peers > 0} class="tracking-wider">
+						· {data.peers}
+						{data.peers === 1 ? 'peer' : 'peers'} on the network
+					</span>
 				</h2>
 				{#if data.publicRepos.length === 0}
 					<div
 						class="border-border text-text-muted rounded-lg border border-dashed px-4 py-6 text-center text-[11px]"
 					>
-						No repos announced by other peers yet. They appear here when a peer is online, and
-						private ones need an invite link.
+						{#if data.peers === 0}
+							No other peer is connected right now. Public repos are announced peer to peer, so this
+							list fills in when another peer hosting repos is online — press Refresh peers once it
+							is. Private repos always need an invite link.
+						{:else}
+							The {data.peers} connected {data.peers === 1 ? 'peer has' : 'peers have'} not announced
+							any public repos yet.
+						{/if}
 					</div>
 				{:else}
 					<ul class="border-border divide-border divide-y overflow-hidden rounded-lg border">
-						{#each data.publicRepos as repo (repo.peerKey + repo.repoId)}
+						{#each data.publicRepos as repo (repo.key)}
 							<li class="bg-bg-secondary px-4 py-3">
 								<div class="flex flex-wrap items-start gap-3">
 									<div class="min-w-0 flex-1">
 										<div class="flex flex-wrap items-center gap-2">
-											<span class="text-text-primary truncate font-mono text-xs">{repo.name}</span>
+											{#if repo.ownId}
+												<a
+													href={`/drive/${repo.ownId}/code`}
+													class="text-text-primary hover:text-accent truncate font-mono text-xs"
+												>
+													{repo.name}
+												</a>
+											{:else}
+												<span class="text-text-primary truncate font-mono text-xs">{repo.name}</span
+												>
+											{/if}
 											<span
 												class="border-border text-text-muted rounded border px-1.5 py-0.5 font-mono text-[9px] tracking-wider uppercase"
 											>
 												{repo.visibility}
 											</span>
+											{#if repo.ownId}
+												<span
+													class="text-accent shrink-0 font-mono text-[9px] tracking-wider uppercase"
+												>
+													yours
+												</span>
+											{:else if repo.openedId}
+												<a
+													href={`/drive/${repo.openedId}/code`}
+													class="text-accent shrink-0 font-mono text-[9px] tracking-wider uppercase hover:underline"
+												>
+													opened · mirror →
+												</a>
+											{/if}
 										</div>
 										{#if repo.description}
 											<p class="text-text-muted mt-1 line-clamp-2 text-[11px]">
@@ -284,26 +320,35 @@
 										</p>
 									</div>
 
-									{#if repo.openable}
+									{#if repo.ownId}
+										<a
+											href={`/drive/${repo.ownId}/code`}
+											class="text-text-muted hover:text-accent shrink-0 font-mono text-[9px] tracking-wider uppercase"
+										>
+											open →
+										</a>
+									{:else if repo.openable}
 										<div class="flex shrink-0 items-center gap-1">
-											<form
-												method="POST"
-												action="?/open"
-												use:enhance={submit('open:' + repo.repoId)}
-											>
-												<input type="hidden" name="driveKey" value={repo.driveKey} />
-												<input type="hidden" name="metaKey" value={repo.metaKey ?? ''} />
-												<input type="hidden" name="name" value={repo.name} />
-												<input type="hidden" name="description" value={repo.description ?? ''} />
-												<input type="hidden" name="ownerKey" value={repo.peerKey} />
-												<button
-													type="submit"
-													disabled={pending === 'open:' + repo.repoId}
-													class="border-border text-text-secondary hover:border-accent hover:text-accent rounded border px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition disabled:opacity-50"
+											{#if !repo.openedId}
+												<form
+													method="POST"
+													action="?/open"
+													use:enhance={submit('open:' + repo.repoId)}
 												>
-													Open
-												</button>
-											</form>
+													<input type="hidden" name="driveKey" value={repo.driveKey} />
+													<input type="hidden" name="metaKey" value={repo.metaKey ?? ''} />
+													<input type="hidden" name="name" value={repo.name} />
+													<input type="hidden" name="description" value={repo.description ?? ''} />
+													<input type="hidden" name="ownerKey" value={repo.peerKey} />
+													<button
+														type="submit"
+														disabled={pending === 'open:' + repo.repoId}
+														class="border-border text-text-secondary hover:border-accent hover:text-accent rounded border px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition disabled:opacity-50"
+													>
+														Open
+													</button>
+												</form>
+											{/if}
 											<form
 												method="POST"
 												action="?/fork"
