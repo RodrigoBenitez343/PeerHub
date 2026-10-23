@@ -25,6 +25,9 @@ export interface Announcement {
 	defaultBranch: string;
 	driveKey: string | null; // public only
 	metaKey: string | null; // public only
+	// 'owner' (default) or 'peers'. Lets a guest show the right state before it
+	// connects; the RPC `policy` call is still the authoritative answer.
+	writeMode: string;
 	ts: number;
 	lastSeen: number;
 }
@@ -58,6 +61,7 @@ export async function ownAnnouncements(app: PeerHubApp): Promise<Announcement[]>
 			defaultBranch: repo?.defaultBranch ?? 'main',
 			driveKey: session.drive ? b4a.toString(session.drive.key, 'hex') : null,
 			metaKey: session.metaKeyHex,
+			writeMode: repo?.writeMode === 'peers' ? 'peers' : 'owner',
 			ts: repo?.createdAt ?? now,
 			lastSeen: now
 		});
@@ -87,6 +91,7 @@ function sanitize(app: PeerHubApp, raw: any): Announcement | null {
 			typeof raw.defaultBranch === 'string' && raw.defaultBranch ? raw.defaultBranch : 'main',
 		driveKey: visibility === 'public' ? driveKey : null,
 		metaKey: visibility === 'public' ? metaKey : null,
+		writeMode: raw.writeMode === 'peers' ? 'peers' : 'owner',
 		ts: Number(raw.ts) || Date.now(),
 		lastSeen: Date.now()
 	};
@@ -111,13 +116,28 @@ export async function ingestAnnouncements(
 	}
 
 	let stored = 0;
+	const accepted: Announcement[] = [];
 	for (const raw of list) {
 		const record = sanitize(app, raw);
 		if (!record) continue;
 		await app.db.insert('@ghostdrive/announcements', record);
+		accepted.push(record);
 		stored++;
 	}
 	if (stored > 0) await app.db.flush();
+
+	// A connected peer that mirrors this repo should notice a policy change
+	// without reconnecting. Matched by drive key, which only public repos
+	// announce; an invite-only repo learns the policy from the RPC instead.
+	for (const record of accepted) {
+		if (!record.driveKey) continue;
+		for (const session of app.sessions.values()) {
+			if (!session.isGuest || !session.drive) continue;
+			if (b4a.toString(session.drive.key, 'hex') !== record.driveKey) continue;
+			session.applyRemoteWriteMode(record.writeMode);
+		}
+	}
+
 	return stored;
 }
 

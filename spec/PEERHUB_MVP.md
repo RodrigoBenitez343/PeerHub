@@ -788,3 +788,75 @@ branch page shows the same history → delete branch 303.
 - Two processes cannot run the app at once (the corestore lock is the guard), and in dev mode an
   HMR reload can briefly create a second instance — restart `npm run dev` if you see
   "File descriptor could not be locked".
+
+---
+
+## 16. Sync direction: one-way by default (implemented)
+
+Two-way sync shipped as the default in every layer, which was wrong: a peer could overwrite
+the repo (and every other peer) simply by linking a folder. Direction is now explicit, and the
+default is **owner → peers**, then **newest → oldest**.
+
+**Repo policy (`repo.writeMode`, schema v9)**
+
+- `'owner'` (default) / `'peers'`. Stored on the catalog row, announced to peers in
+  `announcement.writeMode`, and enforced by the host, not the client.
+- Host: `SharedDrive.peerWrites` is loaded from the catalog row in `session._open()`. The RPC
+  handlers `put-begin`, `del`, `meta-put`, `meta-del` answer `ok: 0` with
+  `READ_ONLY_MESSAGE` when it is false, so a modified client cannot push either. Reads
+  (`manifest`, `stat`, `read`) stay open — a one-way repo must still be browsable.
+- Guest: starts read-only. `refreshPolicy()` asks the host over a new `policy` RPC on every
+  connect; `applyRemoteWriteMode()` applies announced changes to public repos without a
+  reconnect. `canWrite` = `isHost || (peers > 0 && peerWrites)`, and `connected` (used by pull)
+  only needs a reachable host.
+- Content-only gate: `CONTENT_COLLECTIONS` (commits, refs, wiki) follow the policy. Issues,
+  stars, watches and other tracker/social records still accept peer writes — they are not the
+  repo's content or history.
+- Owner switch: Settings → Write direction (`session.setWriteMode`), which updates the catalog
+  row and re-announces. Guests re-check via Settings → Re-check for invite-only repos.
+
+**Linked folder (`SyncPair.direction`)**
+
+- `'pull'` (default) / `'two-way'`. Stored in `sync-pairs.json`; pairs written before this
+  field existed come back as `pull` — the old two-way default is not inherited.
+- `pull`: repo → folder only. Repo deletions delete the local copy; local additions/edits/
+  deletions are counted in `SyncSummary.skipped` and deliberately **not recorded** in the sync
+  state, so switching to two-way later still pushes them.
+- `two-way`: local changes may push, but each path is decided by version: a push happens only
+  when the local copy is newer than the repo's by more than `MTIME_SLACK`; a tie or an older
+  copy pulls instead and counts as a conflict. This is the newest → oldest rule, applied per
+  file rather than per peer.
+- Failures are loud: a two-way folder on a one-way repo throws
+  _"This repository is one-way: the owner has not enabled peer writes…"_ instead of quietly
+  pulling.
+
+**Surfaces**
+
+- Settings → Write direction (owner toggle / guest re-check) and Settings → Local sync →
+  `1-way` / `2-way` per pair, with direction in the last-sync line.
+- Files tab: read-only banner and `one-way` badge in `RepoHeader` for a guest mirror; upload and
+  delete controls disappear because `canWrite` is false.
+- `PUT`/`DELETE /api/files` answer `403` with the same message (`409` when not connected, which
+  is a different fix).
+- CLI: `peerhub status` prints the direction and refuses to imply a push happened;
+  `peerhub sync --push` pushes for one run; `peerhub direction one-way|two-way` persists it;
+  `peerhub commit` runs two-way for its one pass (a commit is an explicit push);
+  `peerhub auto --commit` turns the folder two-way, because a checkpoint with nothing pushable
+  would be a lie.
+
+**Verified live (21/21 checks, one peer)**
+
+- Fresh repo + linked folder: default `pull`, first sync `skipped: 3`, repo still empty.
+- Flip to two-way: `added: 3`, files land in `sessions/<id>/shared`, `.gitignore` still drops
+  `node_modules/`.
+- Flip back to one-way, edit locally: `skipped: 1`, repo content unchanged.
+- Two-way with a newer local copy: pushed. Repo given a newer copy and the folder an older one
+  (`utimes` back an hour): sync pulled, the repo kept its version, conflict reported.
+- `setWriteMode` round-trip: catalog row reads `peers`, then `owner` again.
+
+**Not verified here**
+
+- The host-side refusal of a _second_ peer's write (needs two live peers); the gate is a
+  three-line check in each RPC handler, and the client-side state is covered.
+- Private repos do not announce a drive key, so a policy change reaches them on reconnect or
+  via the Settings → Re-check button, not through the announcement path.

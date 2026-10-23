@@ -24,6 +24,11 @@ const CHUNK = 1024 * 1024;
 const OPEN_TIMEOUT = 10_000;
 const EMPTY = Buffer.alloc(0);
 
+// Shown to a peer that tries to write a one-way repo. Deliberately actionable:
+// the fix is on the owner's side, not the guest's.
+export const READ_ONLY_MESSAGE =
+	'This repository is one-way: only the owner can change it. Ask the owner to enable peer writes in Settings.';
+
 // distributed-drive keeps _open/_close out of its type declarations, so the
 // lifecycle hooks are reached through the prototype instead of `super`.
 const BaseDrive = DistributedDrive as any;
@@ -115,6 +120,9 @@ const MetaPutRequest = struct([
 	['collection', c.string],
 	['doc', c.string]
 ]);
+// Write policy, answered by the host. `peerWrites` is 1 only when the owner
+// turned two-way sync on for this repo.
+const PolicyResponse = struct([['peerWrites', c.uint]]);
 
 const manifestOpts = { requestEncoding: c.string, responseEncoding: ManifestResponse };
 const statOpts = { requestEncoding: c.string, responseEncoding: StatResponse };
@@ -124,6 +132,7 @@ const putBeginOpts = { requestEncoding: PutBeginRequest, responseEncoding: OkRes
 const putChunkOpts = { requestEncoding: PutChunkRequest, responseEncoding: OkResponse };
 const putEndOpts = { requestEncoding: PutEndRequest, responseEncoding: OkResponse };
 const metaPutOpts = { requestEncoding: MetaPutRequest, responseEncoding: OkResponse };
+const policyOpts = { requestEncoding: c.uint, responseEncoding: PolicyResponse };
 
 // --- path helpers (mirror distributed-drive's mount rules) ----------------
 
@@ -235,6 +244,12 @@ export default class SharedDrive extends DistributedDrive {
 	// Same, for deletes (branch removal).
 	onMetaDelete: ((collection: string, key: unknown) => Promise<void>) | null = null;
 
+	// Repo write policy, owned by the host. Default is one-way: the owner writes,
+	// every other peer replicates. A guest mirrors this value (see
+	// refreshPolicy) and the host still refuses writes when it is false — the
+	// flag is a courtesy, the RPC check is the gate.
+	peerWrites = false;
+
 	private _uploads = new Map<string, Upload>();
 	private _writeRpcs = new Set<any>();
 	private _writeRpc: any = null;
@@ -255,9 +270,46 @@ export default class SharedDrive extends DistributedDrive {
 		return !!(this as any).server;
 	}
 
-	// A guest can only change the shared file system while the host is reachable.
-	get canWrite(): boolean {
+	// Reachable host: this peer is the owner, or a guest with at least one
+	// connected peer. Reads and pulls only need this, not write permission.
+	get connected(): boolean {
 		return this.isHost || this.peers > 0;
+	}
+
+	// A guest can only change the shared file system when the host is reachable
+	// *and* the owner enabled peer writes. One-way repos are the default.
+	get canWrite(): boolean {
+		return this.isHost || (this.peers > 0 && this.peerWrites);
+	}
+
+	get writeMode(): 'owner' | 'peers' {
+		return this.peerWrites ? 'peers' : 'owner';
+	}
+
+	// Host side: apply a policy change coming from the repo owner.
+	setPeerWrites(enabled: boolean): void {
+		this.peerWrites = !!enabled;
+	}
+
+	// Guest side: ask the host what the current policy is. Called on connect and
+	// before a write, so a toggle on the owner side takes effect without
+	// reopening the repo.
+	async refreshPolicy(): Promise<boolean> {
+		if (this.isHost) return this.peerWrites;
+		if (this.peers === 0) {
+			this.peerWrites = false;
+			return false;
+		}
+
+		try {
+			const rpc = await this._writeChannel();
+			const res = await rpc.request('policy', 0, policyOpts);
+			this.peerWrites = !!res.peerWrites;
+		} catch {
+			// Host too old or connection dropped: stay read-only.
+			this.peerWrites = false;
+		}
+		return this.peerWrites;
 	}
 
 	// Keep the offline cache last in the lookup order, whatever was registered
@@ -587,6 +639,7 @@ export default class SharedDrive extends DistributedDrive {
 			rpc.respond('meta-put', metaPutOpts, (req: any) => this._onMetaPut(req));
 			rpc.respond('meta-del', metaPutOpts, (req: any) => this._onMetaDelete(req));
 			rpc.respond('del', delOpts, (path: string) => this._onDelete(path));
+			rpc.respond('policy', policyOpts, () => ({ peerWrites: this.peerWrites ? 1 : 0 }));
 		});
 	}
 
@@ -622,6 +675,7 @@ export default class SharedDrive extends DistributedDrive {
 
 	private async _onPutBegin({ id, path }: { id: string; path: string }) {
 		try {
+			if (!this.peerWrites) return fail(new Error(READ_ONLY_MESSAGE));
 			const normalized = normalizePath(path);
 			const target = await this._routeWrite(normalized);
 			const upload: Upload = {
@@ -686,6 +740,7 @@ export default class SharedDrive extends DistributedDrive {
 
 	private async _onMetaPut({ collection, doc }: { collection: string; doc: string }) {
 		try {
+			if (!this.peerWrites) throw new Error(READ_ONLY_MESSAGE);
 			if (!this.onMetaWrite) throw new Error('This repo does not accept metadata writes');
 			let parsed: unknown;
 			try {
@@ -703,6 +758,7 @@ export default class SharedDrive extends DistributedDrive {
 
 	private async _onMetaDelete({ collection, doc }: { collection: string; doc: string }) {
 		try {
+			if (!this.peerWrites) throw new Error(READ_ONLY_MESSAGE);
 			if (!this.onMetaDelete) throw new Error('This repo does not accept metadata deletes');
 			let parsed: unknown;
 			try {
@@ -720,6 +776,7 @@ export default class SharedDrive extends DistributedDrive {
 
 	private async _onDelete(path: string) {
 		try {
+			if (!this.peerWrites) return fail(new Error(READ_ONLY_MESSAGE));
 			const normalized = normalizePath(path);
 			const target = await this._routeDelete(normalized);
 			if (!target) return ok();

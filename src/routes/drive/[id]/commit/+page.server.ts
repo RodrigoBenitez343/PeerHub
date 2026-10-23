@@ -45,7 +45,12 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const ref = await getRef(session, branch);
 
 	return {
-		drive: { id: session.id, name: session.name, isGuest: session.isGuest },
+		drive: {
+			id: session.id,
+			name: session.name,
+			isGuest: session.isGuest,
+			canWrite: session.canWrite
+		},
 		repo: {
 			visibility: repo?.visibility ?? 'public',
 			defaultBranch: repo?.defaultBranch ?? DEFAULT_BRANCH,
@@ -62,7 +67,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			message: entry.message,
 			ts: entry.ts
 		})),
-		canCommit: session.metaWritable || session.peerCount > 0,
+		canCommit: session.canWrite,
 		metaShared: session.metaShared
 	};
 };

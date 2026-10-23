@@ -10,6 +10,7 @@
 		visibility = 'public',
 		active = 'files',
 		isGuest = false,
+		canWrite = true,
 		forkedFrom = null
 	}: {
 		id: string;
@@ -17,6 +18,7 @@
 		visibility?: string;
 		active?: RepoTab;
 		isGuest?: boolean;
+		canWrite?: boolean;
 		forkedFrom?: string | null;
 	} = $props();
 
@@ -45,6 +47,14 @@
 		>
 			{isGuest ? 'mirror' : visibility}
 		</span>
+		{#if isGuest && !canWrite}
+			<span
+				class="border-border text-text-muted shrink-0 rounded border px-2 py-0.5 font-mono text-[9px] tracking-wider uppercase"
+				title="The owner has not enabled peer writes"
+			>
+				one-way
+			</span>
+		{/if}
 		{#if forkedFrom}
 			<span class="text-text-muted flex shrink-0 items-center gap-1 font-mono text-[9px]">
 				<Icon name="fork" size={12} />

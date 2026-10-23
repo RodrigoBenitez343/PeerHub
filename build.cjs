@@ -87,7 +87,10 @@ ns.register({
 		{ name: 'createdAt', type: 'uint', required: true },
 		// Appended fields (hyperschema is positional): fork attribution.
 		{ name: 'forkedFrom', type: 'string' }, // repo id of the source repo
-		{ name: 'sourceKey', type: 'string' } // hex drive key of the source repo
+		{ name: 'sourceKey', type: 'string' }, // hex drive key of the source repo
+		// Who may change content. 'owner' (default) = one-way, only the repo
+		// owner's writes reach peers; 'peers' = peers may push back.
+		{ name: 'writeMode', type: 'string' }
 	]
 });
 
@@ -325,7 +328,10 @@ ns.register({
 		{ name: 'driveKey', type: 'string' }, // public repos only
 		{ name: 'metaKey', type: 'string' }, // public repos only
 		{ name: 'ts', type: 'uint', required: true },
-		{ name: 'lastSeen', type: 'uint', required: true }
+		{ name: 'lastSeen', type: 'uint', required: true },
+		// Mirrors repo.writeMode so a guest knows, before writing, whether the
+		// owner allows peer writes (the RPC policy call is still authoritative).
+		{ name: 'writeMode', type: 'string' }
 	]
 });
 

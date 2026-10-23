@@ -13,6 +13,10 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		peers: loadPeers(locals.app, params.id),
 		canPickDirectory: pickerAvailable(),
 		canWrite: session.canWrite,
+		connected: session.connected,
+		isGuest: session.isGuest,
+		// 'owner' = one-way (default). The owner flips it; a guest can re-ask.
+		writeMode: session.writeMode,
 		syncPairs: session.listSyncPairs()
 	};
 };
@@ -142,6 +146,70 @@ export const actions: Actions = {
 			return fail(400, { error: err.message });
 		}
 		return {};
+	},
+
+	// One-way (default) vs two-way for a single linked folder. A one-way folder
+	// only receives; two-way lets it push, subject to the repo policy above.
+	setSyncDirection: async ({ locals, params, request }) => {
+		const session = locals.app.getSession(params.id);
+		if (!session) throw error(404, 'Drive not found');
+
+		const form = await request.formData();
+		const id = (form.get('syncId') ?? '').toString();
+		const direction = (form.get('direction') ?? '') === 'two-way' ? 'two-way' : 'pull';
+		if (!id) return fail(400, { error: 'Missing sync folder' });
+
+		try {
+			await session.setSyncDirection(id, direction);
+		} catch (err: any) {
+			return fail(400, { error: err.message });
+		}
+		return {
+			message:
+				direction === 'two-way'
+					? 'Folder set to two-way — local changes can be pushed'
+					: 'Folder set to one-way — it now only receives'
+		};
+	},
+
+	// Owner only: flip the repo between one-way and two-way. This is the switch
+	// that lets other peers write at all; it is off by default.
+	setWriteMode: async ({ locals, params, request }) => {
+		const session = locals.app.getSession(params.id);
+		if (!session) throw error(404, 'Drive not found');
+
+		const form = await request.formData();
+		const mode = (form.get('mode') ?? '') === 'peers' ? 'peers' : 'owner';
+
+		try {
+			await session.setWriteMode(mode);
+		} catch (err: any) {
+			return fail(400, { error: err.message });
+		}
+		return {
+			message:
+				mode === 'peers'
+					? 'Peer writes enabled — connected peers can now push'
+					: 'Peer writes disabled — this repo is one-way again'
+		};
+	},
+
+	// Guest side: ask the host for the current policy instead of waiting for a
+	// reconnect (announcements cover public repos, this covers invite-only ones).
+	refreshPolicy: async ({ locals, params }) => {
+		const session = locals.app.getSession(params.id);
+		if (!session) throw error(404, 'Drive not found');
+
+		try {
+			const allowed = await session.refreshWritePolicy();
+			return {
+				message: allowed
+					? 'Peer writes are enabled by the owner'
+					: 'This repository is one-way: only the owner can write'
+			};
+		} catch (err: any) {
+			return fail(400, { error: err.message });
+		}
 	},
 
 	// Manual run: waits for the reconcile so the result can be shown.

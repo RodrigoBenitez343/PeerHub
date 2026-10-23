@@ -21,6 +21,9 @@ export interface RepoMeta {
 	createdAt: number;
 	forkedFrom: string | null; // repo id of the source repo
 	sourceKey: string | null; // hex drive key of the source repo
+	// 'owner' (default) = one-way: peers replicate, only the owner writes.
+	// 'peers' = two-way: peers may push back. See session.setWriteMode().
+	writeMode: string | null;
 }
 
 // Write the catalog row for a session. Called from app.createSession / acceptInvite.
@@ -32,6 +35,7 @@ export async function registerRepo(
 		visibility?: string;
 		defaultBranch?: string;
 		ownerKey?: string;
+		writeMode?: 'owner' | 'peers';
 	}
 ): Promise<RepoMeta> {
 	const rec: RepoMeta = {
@@ -44,7 +48,10 @@ export async function registerRepo(
 		topics: null,
 		createdAt: Date.now(),
 		forkedFrom: null,
-		sourceKey: null
+		sourceKey: null,
+		// One-way unless asked otherwise, including for a mirror opened from a
+		// public announcement: the owner's announcement/RPC decides, not this row.
+		writeMode: meta.writeMode ?? 'owner'
 	};
 	await app.db!.insert('@ghostdrive/repos', rec);
 	await app.db!.flush();

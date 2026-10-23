@@ -18,6 +18,9 @@ export interface DriveInfo {
 	name: string;
 	peerCount: number;
 	isGuest: boolean;
+	/** False for a mirror of a one-way repo: the owner has not enabled peer writes. */
+	canWrite: boolean;
+	writeMode: 'owner' | 'peers';
 }
 
 export interface DriveEntry {
@@ -57,7 +60,9 @@ export async function loadDrive(app: App, id: string): Promise<DriveInfo> {
 		id: session.id,
 		name: session.name,
 		peerCount: session.peerCount,
-		isGuest: session.isGuest
+		isGuest: session.isGuest,
+		canWrite: session.canWrite,
+		writeMode: session.writeMode
 	};
 }
 

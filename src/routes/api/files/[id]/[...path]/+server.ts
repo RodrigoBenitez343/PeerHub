@@ -2,6 +2,16 @@ import type { RequestHandler } from './$types';
 import { error, json } from '@sveltejs/kit';
 import { invalidateEntries } from '$lib/server/loaders';
 import { invalidateIgnore, loadIgnoreMatcher } from '$lib/server/ignores';
+import { READ_ONLY_MESSAGE } from '$lib/server/shared-drive';
+
+// Guard for both write verbs. Not connected is a different failure from
+// "connected but the repo is one-way", and they need different advice.
+async function requireWritable(session: any): Promise<void> {
+	if (!session.drive?.connected) throw error(409, 'Not connected to the host');
+	// The owner may have flipped the policy since this peer connected.
+	if (!session.canWrite && session.isGuest) await session.refreshWritePolicy();
+	if (!session.canWrite) throw error(403, READ_ONLY_MESSAGE);
+}
 
 const CHUNK_SIZE = 1024 * 1024; // 1MB
 
@@ -162,7 +172,7 @@ export const PUT: RequestHandler = async ({ locals, params, request }) => {
 
 	const session = locals.app.getSession(params.id);
 	if (!session) throw error(404, 'Drive not found');
-	if (!session.canWrite) throw error(409, 'Not connected to the host');
+	await requireWritable(session);
 
 	const filePath = filePathOf(params);
 
@@ -203,7 +213,7 @@ export const DELETE: RequestHandler = async ({ locals, params }) => {
 
 	const session = locals.app.getSession(params.id);
 	if (!session) throw error(404, 'Drive not found');
-	if (!session.canWrite) throw error(409, 'Not connected to the host');
+	await requireWritable(session);
 
 	const filePath = filePathOf(params);
 	try {

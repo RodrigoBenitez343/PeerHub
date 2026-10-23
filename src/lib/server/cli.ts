@@ -46,6 +46,10 @@ export interface StatusReport {
 	/** Local folder entries that are not in the repo at all (subset of `changes`). */
 	untracked: string[];
 	clean: boolean;
+	/** How the linked folder is allowed to move: 'pull' (default) or 'two-way'. */
+	direction: 'pull' | 'two-way';
+	/** True when a push would actually be accepted (owner, or peer writes on). */
+	canPush: boolean;
 }
 
 function normalize(path: string): string {
@@ -140,7 +144,9 @@ export async function status(app: PeerHubApp, cwd: string): Promise<StatusReport
 			: null,
 		changes,
 		untracked: changes.filter((change) => change.status === 'added').map((change) => change.path),
-		clean: changes.length === 0
+		clean: changes.length === 0,
+		direction: pair.direction,
+		canPush: session.canWrite
 	};
 }
 
@@ -165,8 +171,9 @@ export async function commitWorkingTree(
 
 	// Push the working tree into the repo first: the commit snapshots what the
 	// repo holds, and the sync engine is the one component that knows how to
-	// reconcile local edits, deletions and conflicts.
-	const sync = await session.runSync(pair.id);
+	// reconcile local edits, deletions and conflicts. Commit is an explicit push,
+	// so it runs two-way even when the folder is normally one-way.
+	const sync = await session.runSync(pair.id, { direction: 'two-way' });
 
 	const record = await commit(session, {
 		message,
@@ -258,14 +265,38 @@ export async function restore(
 	return { sha: record.sha, short: shortSha(record.sha), dryRun: !!options.dryRun, actions };
 }
 
-export async function syncNow(app: PeerHubApp, cwd: string): Promise<SyncSummary> {
+export async function syncNow(
+	app: PeerHubApp,
+	cwd: string,
+	options: { push?: boolean } = {}
+): Promise<SyncSummary> {
 	const { session, pair } = await locateRepo(app, cwd);
-	return session.runSync(pair.id);
+	// Default is whatever the folder is set to (one-way unless changed). `--push`
+	// asks for a push for this run only, without changing the pair.
+	return session.runSync(pair.id, options.push ? { direction: 'two-way' } : {});
+}
+
+export interface DirectionReport {
+	direction: 'pull' | 'two-way';
+	pair: string;
+}
+
+/** Set how a linked folder moves: one-way (pull) or two-way. */
+export async function setDirection(
+	app: PeerHubApp,
+	cwd: string,
+	direction: 'pull' | 'two-way'
+): Promise<DirectionReport> {
+	const { session, pair } = await locateRepo(app, cwd);
+	const next = direction === 'two-way' ? 'two-way' : 'pull';
+	await session.setSyncDirection(pair.id, next);
+	return { direction: next, pair: pair.path };
 }
 
 export interface AutoReport {
 	auto: boolean;
 	autoCommit: boolean;
+	direction: 'pull' | 'two-way';
 	pair: string;
 }
 
@@ -277,14 +308,25 @@ export async function setAuto(
 ): Promise<AutoReport> {
 	const { session, pair } = await locateRepo(app, cwd);
 	const auto = mode === 'on';
-	await session.setSyncAuto(pair.id, auto, options.commit ?? pair.autoCommit);
-	return { auto, autoCommit: auto ? (options.commit ?? pair.autoCommit) : false, pair: pair.path };
+	const autoCommit = auto ? (options.commit ?? pair.autoCommit) : false;
+	// An automatic checkpoint implies pushing: a periodic pass that only ever
+	// pulls has nothing to commit. Make that explicit instead of silently
+	// switching the folder to two-way without saying so.
+	const direction = autoCommit ? 'two-way' : undefined;
+	await session.setSyncAuto(pair.id, auto, autoCommit, direction);
+	return {
+		auto,
+		autoCommit,
+		direction: direction ?? pair.direction,
+		pair: pair.path
+	};
 }
 
 export interface RepoReport {
 	id: string;
 	name: string;
 	visibility: string;
+	writeMode: 'owner' | 'peers';
 	pairs: string[];
 	head: string | null;
 	peers: number;
@@ -301,6 +343,7 @@ export async function listRepos(app: PeerHubApp): Promise<RepoReport[]> {
 			id: session.id,
 			name: session.name,
 			visibility: 'public',
+			writeMode: session.writeMode,
 			pairs: session.listSyncPairs().map((pair) => pair.path),
 			head: head ? shortSha(head.sha) : null,
 			peers: session.peerCount,
@@ -340,7 +383,9 @@ export async function createRepo(
 	});
 
 	const pair = await session.addSyncPair(target);
-	const summary = options.sync === false ? null : await session.runSync(pair.id);
+	// Creating a repo from a folder is an explicit push of that folder.
+	const summary =
+		options.sync === false ? null : await session.runSync(pair.id, { direction: 'two-way' });
 
 	return {
 		id: session.id,
@@ -397,6 +442,8 @@ export interface CliRequest {
 	visibility?: 'public' | 'private';
 	mode?: 'on' | 'off';
 	commit?: boolean;
+	push?: boolean;
+	direction?: 'pull' | 'one-way' | 'two-way';
 	dryRun?: boolean;
 	limit?: number;
 }
@@ -418,9 +465,17 @@ export async function runCli(app: PeerHubApp, request: CliRequest): Promise<unkn
 			if (!request.sha) throw new Error('commit sha required');
 			return restore(app, cwd, request.sha, request.paths ?? [], { dryRun: request.dryRun });
 		case 'sync':
-			return syncNow(app, cwd);
+			return syncNow(app, cwd, { push: request.push });
 		case 'auto':
 			return setAuto(app, cwd, request.mode ?? 'on', { commit: request.commit });
+		case 'direction':
+			// Accept the words people type ('one-way') as well as the internal name
+			// ('pull'), so the CLI and the API cannot disagree about the vocabulary.
+			if (request.direction === 'pull' || request.direction === 'one-way') {
+				return setDirection(app, cwd, 'pull');
+			}
+			if (request.direction === 'two-way') return setDirection(app, cwd, 'two-way');
+			throw new Error("direction must be 'one-way' or 'two-way'");
 		case 'repos':
 			return listRepos(app);
 		case 'create':

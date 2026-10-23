@@ -7,9 +7,11 @@ import fs from 'fs';
 import Hyperbee from 'hyperbee2';
 import HyperDB from 'hyperdb';
 import def from '../../../spec/hyperdb/index.js';
-import SharedDrive from './shared-drive.js';
-import SessionSync, { type SyncPairView, type SyncSummary } from './sync.js';
+import SharedDrive, { READ_ONLY_MESSAGE } from './shared-drive.js';
+import SessionSync, { type SyncPairView, type SyncDirection, type SyncSummary } from './sync.js';
 import { invalidateEntries } from './loaders.js';
+import { updateRepo } from './repos.js';
+import { broadcastAnnouncements } from './directory.js';
 import type PeerHubApp from './app.js';
 
 type Buf = Buffer | Uint8Array;
@@ -49,6 +51,15 @@ const META_WRITE_COLLECTIONS = new Set([
 	'@ghostdrive/threads',
 	'@ghostdrive/posts',
 	'@ghostdrive/webhooks'
+]);
+
+// Collections that change repo content or its history. A peer may only write
+// these when the owner enabled peer writes; tracker/social records (issues,
+// stars, watches) are not content and stay open to every peer.
+const CONTENT_COLLECTIONS = new Set([
+	'@ghostdrive/commits',
+	'@ghostdrive/refs',
+	'@ghostdrive/wikiPages'
 ]);
 
 export default class DriveSession extends ReadyResource {
@@ -103,6 +114,40 @@ export default class DriveSession extends ReadyResource {
 
 	get isGuest(): boolean {
 		return !!this._remoteKey;
+	}
+
+	// Reachable owner: reads and pulls only need this.
+	get connected(): boolean {
+		return !!this.drive?.connected;
+	}
+
+	// 'owner' = one-way (only the owner's writes reach peers). Mirrors the
+	// host's decision; a guest learns it on connect and from announcements.
+	get writeMode(): 'owner' | 'peers' {
+		return this.drive?.writeMode ?? 'owner';
+	}
+
+	/** Owner only: flip the repo between one-way and two-way. */
+	async setWriteMode(mode: 'owner' | 'peers'): Promise<void> {
+		if (this.isGuest) throw new Error('Only the repository owner can change the write policy');
+		if (!this.drive) throw new Error('Drive not ready');
+
+		this.drive.setPeerWrites(mode === 'peers');
+		await updateRepo(this.app, this.id, { writeMode: mode });
+		// Announce the change so connected peers stop showing a read-only repo.
+		broadcastAnnouncements(this.app).catch(() => {});
+	}
+
+	/** Guest side: apply a policy carried by the host's announcement. */
+	applyRemoteWriteMode(mode: string | null | undefined): void {
+		if (!this.isGuest || !this.drive) return;
+		this.drive.setPeerWrites(mode === 'peers');
+	}
+
+	/** Guest side: ask the host directly (authoritative, one round trip). */
+	async refreshWritePolicy(): Promise<boolean> {
+		if (!this.drive || !this.isGuest) return true;
+		return this.drive.refreshPolicy();
 	}
 
 	protected async _open(): Promise<void> {
@@ -188,8 +233,14 @@ export default class DriveSession extends ReadyResource {
 
 		this.drive!.on('connected', () => {
 			console.log(`[session ${this.id}] connected`);
-			this.emit('peer-connected');
-			this.sync?.triggerAuto();
+			// Learn the owner's write policy before anything else, so an automatic
+			// sync does not try to push into a one-way repo.
+			void this.drive!.refreshPolicy()
+				.catch(() => false)
+				.then(() => {
+					this.emit('peer-connected');
+					this.sync?.triggerAuto();
+				});
 		});
 
 		this.drive!.on('disconnected', () => {
@@ -232,6 +283,18 @@ export default class DriveSession extends ReadyResource {
 		this.meta = HyperDB.bee2(this.metaBee, def);
 		await this.meta.ready();
 		log('meta db ready');
+
+		// Write policy for this repo, read from the owner's catalog row. Default is
+		// one-way: peers replicate from the owner and cannot push back until the
+		// owner enables it. A guest starts read-only and asks the host on connect.
+		if (!this.isGuest) {
+			const repo = (await this.app.db!.get('@ghostdrive/repos', { id: this.id })) as any;
+			this.drive!.setPeerWrites(repo?.writeMode === 'peers');
+			log('write policy', this.drive!.writeMode);
+		} else {
+			this.drive!.setPeerWrites(false);
+			log('write policy', 'owner (guest, until host answers)');
+		}
 
 		// Guests write through the host: its core is the only writer, so every
 		// record lands where all peers replicate it from.
@@ -385,9 +448,10 @@ export default class DriveSession extends ReadyResource {
 
 	private writableDrive(): SharedDrive {
 		if (!this.drive) throw new Error('Drive not ready');
-		if (!this.drive.canWrite) {
+		if (!this.drive.connected) {
 			throw new Error('Not connected to the host — reconnect before changing shared files');
 		}
+		if (!this.drive.canWrite) throw new Error(READ_ONLY_MESSAGE);
 		return this.drive;
 	}
 
@@ -413,6 +477,7 @@ export default class DriveSession extends ReadyResource {
 		if (!this.drive || this.drive.peers === 0) {
 			throw new Error('Repository metadata is hosted by the repo owner — reconnect to write');
 		}
+		await this.requireContentWrite(collection);
 		await this.drive.putMetaRemote(collection, value);
 	}
 
@@ -437,7 +502,17 @@ export default class DriveSession extends ReadyResource {
 		if (!this.drive || this.drive.peers === 0) {
 			throw new Error('Repository metadata is hosted by the repo owner — reconnect to delete');
 		}
+		await this.requireContentWrite(collection);
 		await this.drive.deleteMetaRemote(collection, key);
+	}
+
+	// Content writes (commits, refs, wiki) are the repo itself, so they follow
+	// the same one-way rule as files do. Asked live: the owner may have toggled
+	// the policy since this peer connected.
+	private async requireContentWrite(collection: string): Promise<void> {
+		if (!CONTENT_COLLECTIONS.has(collection)) return;
+		const allowed = await this.drive!.refreshPolicy();
+		if (!allowed) throw new Error(READ_ONLY_MESSAGE);
 	}
 
 	// A guest's bee is a read-only replica: pick up whatever the host appended
@@ -477,12 +552,21 @@ export default class DriveSession extends ReadyResource {
 		await this.requireSync().remove(id);
 	}
 
-	async setSyncAuto(id: string, auto: boolean, autoCommit?: boolean): Promise<void> {
-		await this.requireSync().setAuto(id, auto, autoCommit);
+	async setSyncAuto(
+		id: string,
+		auto: boolean,
+		autoCommit?: boolean,
+		direction?: SyncDirection
+	): Promise<void> {
+		await this.requireSync().setAuto(id, auto, autoCommit, direction);
 	}
 
-	async runSync(id: string): Promise<SyncSummary> {
-		return this.requireSync().run(id);
+	async setSyncDirection(id: string, direction: SyncDirection): Promise<void> {
+		await this.requireSync().setDirection(id, direction);
+	}
+
+	async runSync(id: string, options: { direction?: SyncDirection } = {}): Promise<SyncSummary> {
+		return this.requireSync().run(id, options);
 	}
 
 	private requireSync(): SessionSync {

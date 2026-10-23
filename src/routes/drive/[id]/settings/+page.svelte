@@ -201,21 +201,80 @@
 			</div>
 		</div>
 
+		<!-- Repo access -->
+		<div>
+			<h3 class="text-text-muted mb-3 font-mono text-[10px] tracking-[2px] uppercase">
+				Write direction
+			</h3>
+			<div class="border-border bg-bg-secondary rounded-md border p-4">
+				<p class="text-text-secondary mb-3 font-mono text-[10px] leading-relaxed">
+					{#if data.isGuest}
+						This repository is hosted by another peer. By default it is one-way: you replicate from
+						the owner, and nothing you change is pushed back.
+					{:else}
+						By default this repository is one-way: you write, every peer replicates. Turning peer
+						writes on lets connected peers push changes back to you.
+					{/if}
+				</p>
+
+				<div class="flex flex-wrap items-center gap-2">
+					<span
+						class="rounded border px-2 py-1 font-mono text-[9px] tracking-wider uppercase {data.writeMode ===
+						'peers'
+							? 'border-accent-dim text-accent'
+							: 'border-border text-text-muted'}"
+					>
+						{data.writeMode === 'peers' ? 'two-way · peers can write' : 'one-way · owner only'}
+					</span>
+
+					{#if data.isGuest}
+						<form method="POST" action="?/refreshPolicy" use:enhance>
+							<button
+								type="submit"
+								disabled={!data.connected}
+								class="border-border text-text-secondary hover:border-accent-dim hover:text-accent rounded border px-3 py-1.5 font-mono text-[9px] tracking-wider uppercase transition disabled:opacity-50"
+							>
+								Re-check
+							</button>
+						</form>
+					{:else}
+						<form method="POST" action="?/setWriteMode" use:enhance>
+							<input
+								type="hidden"
+								name="mode"
+								value={data.writeMode === 'peers' ? 'owner' : 'peers'}
+							/>
+							<button
+								type="submit"
+								class="rounded border px-3 py-1.5 font-mono text-[9px] tracking-wider uppercase transition {data.writeMode ===
+								'peers'
+									? 'border-danger/50 text-danger hover:bg-danger/10'
+									: 'border-accent-dim text-accent hover:bg-accent-glow'}"
+							>
+								{data.writeMode === 'peers' ? 'Make one-way' : 'Allow peer writes'}
+							</button>
+						</form>
+					{/if}
+				</div>
+			</div>
+		</div>
+
 		<!-- Local sync -->
 		<div>
 			<h3 class="text-text-muted mb-3 font-mono text-[10px] tracking-[2px] uppercase">
 				Local sync
 			</h3>
 			<p class="text-text-muted mb-2 font-mono text-[9px] leading-relaxed">
-				Link a folder on this device with the shared files. Each run copies whatever changed on
-				either side; turn auto on to keep both in step while connected.
+				Link a folder on this device with the repository. A linked folder is one-way by default: it
+				receives changes from the repo. Switch a folder to two-way to push local edits, additions
+				and deletions; the newer copy wins per file.
 			</p>
 
 			{#if actionMessage}
 				<p class="text-success mb-2 font-mono text-[10px]">{actionMessage}</p>
 			{/if}
 
-			{#if !data.canWrite}
+			{#if !data.connected}
 				<p
 					class="border-border bg-bg-secondary text-text-muted rounded-md border px-3 py-4 text-center font-mono text-[10px] tracking-wider uppercase"
 				>
@@ -248,8 +307,31 @@
 								</span>
 								<div class="min-w-0 flex-1">
 									<p class="text-text-primary truncate font-mono text-xs">{pair.path}</p>
-									<p class="text-text-muted font-mono text-[9px]">{lastSyncLabel(pair)}</p>
+									<p class="text-text-muted font-mono text-[9px]">
+										{pair.direction === 'two-way' ? 'two-way' : 'one-way'} · {lastSyncLabel(pair)}
+									</p>
 								</div>
+
+								<form method="POST" action="?/setSyncDirection" use:enhance>
+									<input type="hidden" name="syncId" value={pair.id} />
+									<input
+										type="hidden"
+										name="direction"
+										value={pair.direction === 'two-way' ? 'pull' : 'two-way'}
+									/>
+									<button
+										type="submit"
+										class="rounded border px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition {pair.direction ===
+										'two-way'
+											? 'border-accent-dim text-accent'
+											: 'border-border text-text-muted hover:text-text-secondary'}"
+										title={pair.direction === 'two-way'
+											? 'Stop pushing local changes'
+											: 'Allow local changes to be pushed'}
+									>
+										{pair.direction === 'two-way' ? '2-way' : '1-way'}
+									</button>
+								</form>
 
 								<form method="POST" action="?/syncNow" use:enhance={onSync(pair.id)}>
 									<input type="hidden" name="syncId" value={pair.id} />

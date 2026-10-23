@@ -11,9 +11,14 @@ import { isReservedRepoPath } from './paths.js';
 import { compileIgnore, type IgnoreMatcher, type IgnoreSource } from '$lib/ignore';
 import type DriveSession from './session.js';
 
-// Two-way local sync: a local folder and the shared file system are reconciled
-// in both directions. The first run links them (copies whatever is missing on
-// either side); every later run propagates changes, additions and deletions.
+// Local folder sync. One-way by default: the repo is the source of truth and a
+// linked folder is a checkout that follows it. That is the same default the
+// repo itself has (owner → peers).
+//
+// Two-way is opt-in per folder: only then can a local edit, addition or
+// deletion reach the repo. Even then the newer side wins per path, so a stale
+// folder can never overwrite a version that moved after it — the propagation
+// rule is newest → oldest, not "whoever syncs last".
 //
 // The last known state of each path is kept per side, so a copy is only redone
 // when that side actually changed — a fresh mtime on the receiving side can
@@ -24,12 +29,17 @@ const MTIME_SLACK = 2000;
 const IGNORED_FILES = new Set(['.ds_store', 'thumbs.db', 'desktop.ini']);
 const TEMP_SUFFIX = '.localdrive.tmp';
 
+/** 'pull' = repo → folder only (default). 'two-way' = the folder may push. */
+export type SyncDirection = 'pull' | 'two-way';
+
 export interface SyncPair {
 	id: string;
 	path: string;
 	auto: boolean;
 	/** When true, an automatic pass that moved files also records a commit. */
 	autoCommit: boolean;
+	/** Default 'pull'. Anything else must be chosen by the user. */
+	direction: SyncDirection;
 	createdAt: number;
 	lastSyncAt: number | null;
 	lastResult: string | null;
@@ -44,6 +54,8 @@ export interface SyncSummary {
 	updated: number;
 	deleted: number;
 	conflicts: number;
+	/** Local changes left alone because the folder is one-way. */
+	skipped: number;
 	errors: string[];
 }
 
@@ -119,6 +131,7 @@ export default class SessionSync {
 			path: resolved,
 			auto: false,
 			autoCommit: false,
+			direction: 'pull',
 			createdAt: Date.now(),
 			lastSyncAt: null,
 			lastResult: null
@@ -145,12 +158,13 @@ export default class SessionSync {
 		} catch {}
 	}
 
-	setAuto(id: string, auto: boolean, autoCommit?: boolean): void {
+	setAuto(id: string, auto: boolean, autoCommit?: boolean, direction?: SyncDirection): void {
 		const pair = this.pairs.find((p) => p.id === id);
 		if (!pair) throw new Error('Sync folder not found');
 
 		pair.auto = auto;
 		pair.autoCommit = auto ? (autoCommit ?? pair.autoCommit) : false;
+		if (direction) pair.direction = direction;
 		this.save();
 
 		const timer = this.timers.get(pair.id);
@@ -159,12 +173,19 @@ export default class SessionSync {
 		if (auto) this.schedule(pair);
 	}
 
-	async run(id: string): Promise<SyncSummary> {
+	setDirection(id: string, direction: SyncDirection): void {
+		const pair = this.pairs.find((p) => p.id === id);
+		if (!pair) throw new Error('Sync folder not found');
+		pair.direction = direction === 'two-way' ? 'two-way' : 'pull';
+		this.save();
+	}
+
+	async run(id: string, options: { direction?: SyncDirection } = {}): Promise<SyncSummary> {
 		const pair = this.pairs.find((p) => p.id === id);
 		if (!pair) throw new Error('Sync folder not found');
 		if (this.running.has(id)) throw new Error('This folder is already syncing');
 
-		return this.exclusive(pair);
+		return this.exclusive(pair, options.direction);
 	}
 
 	// Called when a peer connects: catch up on anything that moved meanwhile.
@@ -185,7 +206,8 @@ export default class SessionSync {
 	private async runAuto(pair: SyncPair): Promise<void> {
 		if (this.closed) return;
 		if (this.running.has(pair.id)) return;
-		if (!this.session.drive?.canWrite) return;
+		// Pulling needs a reachable owner, not write permission.
+		if (!this.session.drive?.connected) return;
 
 		try {
 			await this.exclusive(pair);
@@ -194,11 +216,16 @@ export default class SessionSync {
 		}
 	}
 
-	private async exclusive(pair: SyncPair): Promise<SyncSummary> {
+	private async exclusive(pair: SyncPair, direction?: SyncDirection): Promise<SyncSummary> {
 		this.running.add(pair.id);
 
 		try {
-			const summary = await syncOnce(this.session, pair, this.stateFile(pair.id));
+			const summary = await syncOnce(
+				this.session,
+				pair,
+				this.stateFile(pair.id),
+				direction ?? pair.direction
+			);
 			pair.lastSyncAt = Date.now();
 			pair.lastResult = formatSummary(summary);
 
@@ -250,6 +277,10 @@ export default class SessionSync {
 					path: pair.path,
 					auto: !!pair.auto,
 					autoCommit: !!pair.autoCommit,
+					// Pairs created before directions existed were two-way only because
+					// that was the old default. Two-way is now an explicit choice, so a
+					// pair with no stored direction comes back as one-way.
+					direction: pair.direction === 'two-way' ? 'two-way' : 'pull',
 					createdAt: pair.createdAt ?? Date.now(),
 					lastSyncAt: pair.lastSyncAt ?? null,
 					lastResult: pair.lastResult ?? null
@@ -272,17 +303,37 @@ export default class SessionSync {
 async function syncOnce(
 	session: DriveSession,
 	pair: SyncPair,
-	stateFile: string
+	stateFile: string,
+	direction: SyncDirection = 'pull'
 ): Promise<SyncSummary> {
 	const drive = session.drive;
 	if (!drive) throw new Error('Drive not ready');
-	if (!drive.canWrite) throw new Error('Not connected to the host');
+	if (!drive.connected) throw new Error('Not connected to the host');
 	if (!fs.existsSync(pair.path)) throw new Error(`Folder is gone: ${pair.path}`);
+
+	// Pushing needs the owner's permission. Say so instead of quietly turning a
+	// two-way folder into a one-way one: a user who asked for two-way must know
+	// why nothing left the machine.
+	const twoWay = direction === 'two-way';
+	if (twoWay && !drive.canWrite) {
+		throw new Error(
+			session.isGuest
+				? 'This repository is one-way: the owner has not enabled peer writes, so local changes cannot be pushed.'
+				: 'Not connected to the host — reconnect before pushing local changes.'
+		);
+	}
 
 	const local = new Localdrive(pair.path, { atomic: true });
 	await local.ready();
 
-	const summary: SyncSummary = { added: 0, updated: 0, deleted: 0, conflicts: 0, errors: [] };
+	const summary: SyncSummary = {
+		added: 0,
+		updated: 0,
+		deleted: 0,
+		conflicts: 0,
+		skipped: 0,
+		errors: []
+	};
 	const state = readState(stateFile);
 
 	// A mirrored folder is an upload: the same .gitignore rules that filter the
@@ -349,9 +400,43 @@ async function syncOnce(
 		if (!localChanged && !sharedChanged) continue;
 
 		try {
-			if (localChanged && !sharedChanged) {
+			if (localChanged && sharedChanged) {
+				summary.conflicts++;
+				if (localStat && sharedStat) {
+					// Same amount of data on both sides is almost certainly the copy we
+					// made ourselves, with a fresher mtime on one of them.
+					if (localStat.size !== sharedStat.size) {
+						if (twoWay && !ignored && localIsNewer(localStat, sharedStat, base)) {
+							// Newest → oldest: push only when this folder really is newer.
+							await localToShared(filePath);
+							summary.updated++;
+						} else {
+							await sharedToLocal(filePath);
+							summary.updated++;
+						}
+					}
+				} else if (localStat && !sharedStat) {
+					// Removed from the repo, edited here. Keep the edit when the folder
+					// may push; otherwise leave it alone (never destroy local work).
+					if (twoWay && !ignored) {
+						await localToShared(filePath);
+						summary.added++;
+					} else summary.skipped++;
+				} else if (!localStat && sharedStat) {
+					// Deleted here but still in the repo: it comes back, so a one-way
+					// folder can never silently lose content.
+					await sharedToLocal(filePath);
+					summary.added++;
+				}
+			} else if (localChanged) {
+				// Only this folder moved.
 				if (ignored) {
-					// Local-only change: nothing to propagate upward.
+					// Nothing to propagate upward.
+				} else if (!twoWay) {
+					// One-way: local edits stay local and stay visible as pending.
+					// Not recorded, so flipping the folder to two-way pushes them.
+					summary.skipped++;
+					continue;
 				} else if (localStat && !sharedStat) {
 					await localToShared(filePath);
 					summary.added++;
@@ -362,7 +447,8 @@ async function syncOnce(
 					await drive.deleteShared(filePath);
 					summary.deleted++;
 				}
-			} else if (!localChanged && sharedChanged) {
+			} else {
+				// Only the repo moved: repo → folder, in both directions.
 				if (sharedStat && !localStat) {
 					await sharedToLocal(filePath);
 					summary.added++;
@@ -373,24 +459,6 @@ async function syncOnce(
 					await local.del(filePath);
 					summary.deleted++;
 				}
-			} else if (localStat && sharedStat) {
-				// Both sides moved: the newer write wins, unless both already hold
-				// the same amount of data (then it is almost certainly the copy we
-				// made ourselves, with a fresher mtime on one side).
-				if (localStat.size !== sharedStat.size) {
-					summary.conflicts++;
-					if (newer(localStat, sharedStat, base)) {
-						if (!ignored) await localToShared(filePath);
-					} else await sharedToLocal(filePath);
-				}
-			} else if (localStat && !sharedStat && base?.shared) {
-				// Deleted on the shared side but edited here — keep the edit.
-				summary.conflicts++;
-				await localToShared(filePath);
-			} else if (sharedStat && !localStat && base?.local) {
-				// Deleted here but edited on the shared side — bring it back.
-				summary.conflicts++;
-				await sharedToLocal(filePath);
 			}
 
 			await record(filePath);
@@ -478,10 +546,13 @@ function unchanged(current: SideStat | undefined, previous: SideStat | undefined
 	return true;
 }
 
-function newer(current: SideStat, other: SideStat, base: StateEntry | undefined): boolean {
-	const currentMtime = current.mtime ?? base?.local?.mtime ?? 0;
-	const otherMtime = other.mtime ?? base?.shared?.mtime ?? 0;
-	return currentMtime >= otherMtime;
+// Newest → oldest. The folder may only overwrite the repo when its copy is
+// strictly newer; a tie (or no mtime) goes to the repo, because the owner's
+// version is the one every peer has already replicated.
+function localIsNewer(local: SideStat, shared: SideStat, base: StateEntry | undefined): boolean {
+	const localMtime = local.mtime ?? base?.local?.mtime ?? 0;
+	const sharedMtime = shared.mtime ?? base?.shared?.mtime ?? 0;
+	return localMtime > sharedMtime + MTIME_SLACK;
 }
 
 function isIgnored(filePath: string): boolean {
@@ -519,6 +590,7 @@ export function formatSummary(summary: SyncSummary): string {
 		`${summary.deleted} deleted`
 	];
 	if (summary.conflicts > 0) parts.push(`${summary.conflicts} conflicts`);
+	if (summary.skipped > 0) parts.push(`${summary.skipped} local changes not pushed (one-way)`);
 	if (summary.errors.length > 0) parts.push(`${summary.errors.length} errors`);
 	return parts.join(', ');
 }

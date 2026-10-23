@@ -52,6 +52,7 @@
 		visibility={data.repo.visibility}
 		active="files"
 		isGuest={drive.isGuest}
+		canWrite={drive.canWrite}
 		forkedFrom={data.repo.forkedFrom}
 	/>
 	<div class="border-border bg-bg-secondary flex items-center gap-2 border-b px-3 py-1.5 md:px-4">
@@ -65,6 +66,17 @@
 			onchange={handlePeersChange}
 		/>
 	</div>
+
+	{#if drive.isGuest && !drive.canWrite}
+		<div
+			class="border-border bg-bg-secondary border-l-accent-dim flex items-center gap-3 border-b border-l-2 px-4 py-2"
+		>
+			<span class="bg-accent block h-1.5 w-1.5 shrink-0 rounded-full"></span>
+			<span class="text-text-secondary flex-1 font-mono text-[10px] tracking-wider">
+				One-way repository · the owner has not enabled peer writes, so this is a read-only copy
+			</span>
+		</div>
+	{/if}
 
 	{#if drive.isGuest && peers === 0}
 		<div
@@ -110,7 +122,7 @@
 					entries={cachedEntries}
 					{peers}
 					isGuest={drive.isGuest}
-					canWrite={!drive.isGuest || peers > 0}
+					canWrite={drive.canWrite}
 					ignore={data.ignore}
 				/>
 			{:else}
@@ -139,7 +151,7 @@
 				entries={cachedEntries ?? entries}
 				{peers}
 				isGuest={drive.isGuest}
-				canWrite={!drive.isGuest || peers > 0}
+				canWrite={drive.canWrite}
 				ignore={data.ignore}
 			/>
 		{/await}

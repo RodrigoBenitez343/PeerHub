@@ -108,7 +108,12 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const readme = !selected && !filesError ? await loadReadme(session, files) : null;
 
 	return {
-		drive: { id: session.id, name: session.name, isGuest: session.isGuest },
+		drive: {
+			id: session.id,
+			name: session.name,
+			isGuest: session.isGuest,
+			canWrite: session.canWrite
+		},
 		repo: {
 			description: repo?.description ?? null,
 			visibility: repo?.visibility ?? 'public',
@@ -138,7 +143,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		readme,
 		peers: session.peerCount,
 		driveKey: session.drive ? b4a.toString(session.drive.key, 'hex') : null,
-		canCommit: session.metaWritable || session.peerCount > 0,
+		canCommit: session.canWrite,
 		metaShared: session.metaShared,
 		metaWritable: session.metaWritable
 	};

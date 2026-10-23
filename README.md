@@ -63,8 +63,8 @@ to start over as a new peer.
 | **Explore**      | Search every repo this device owns or opened, plus everything other peers announced. Filters for yours / public / private.                                                                      |
 | **Public repos** | Open a read-only mirror with no invite. Private repos show by name only and need an invite link.                                                                                                |
 | **Uploads**      | Files or whole folders from any peer. Picking a folder uploads its **contents** into the current directory (no wrapper folder), and `.gitignore` is honoured on both ends.                      |
-| **Local sync**   | Link a folder on disk; reconcile on demand or every 15 s, two-way, additions/edits/deletions.                                                                                                   |
-| **Terminal CLI** | Work on a linked folder like a git checkout while the app runs: `status`, `commit`, `log`, `show`, `restore`, `sync`, `auto on/off`.                                                            |
+| **Local sync**   | Link a folder on disk. One-way by default (repo → folder); two-way is opt-in per folder, and even then the newer copy wins per file.                                                            |
+| **Terminal CLI** | Work on a linked folder like a git checkout while the app runs: `status`, `commit`, `log`, `show`, `restore`, `sync`, `direction`, `auto on/off`.                                               |
 | **Identity**     | Persistent keypair stored in the data dir; a profile record (handle, display name, bio, avatar) is seeded on first run and replicated to peers.                                                 |
 
 ### .gitignore-aware uploads
@@ -91,6 +91,27 @@ Linked folders go through the same matcher, so a mirrored project folder does no
 
 A folder pick uploads what is _inside_ the folder. Picking `my-project` puts `README.md` at
 `/README.md`, not `/my-project/README.md` — the same tree `git init` would give you.
+
+### One-way by default
+
+Nothing a peer does reaches the repo unless the owner allows it. Two separate switches, both
+off by default:
+
+| Switch               | Where                                            | Default       | What it changes                                                    |
+| -------------------- | ------------------------------------------------ | ------------- | ------------------------------------------------------------------ |
+| **Peer writes**      | Repo → Settings → Write direction                | off (one-way) | Whether other peers may push files and commits to this repo at all |
+| **Folder direction** | Repo → Settings → Local sync → `1-way` / `2-way` | one-way       | Whether a linked folder on this device can push, or only receives  |
+
+Propagation order is **newest → oldest**. With two-way on, a copy is only pushed when it is
+strictly newer than the repo's; a tie goes to the repo, because that is the version every peer
+already replicated. An older folder therefore cannot overwrite a newer file — the sync pulls
+instead and reports the file as a conflict.
+
+One-way folders never lose local work: local edits are counted as `local changes not pushed`,
+kept on disk, and left out of the sync state so flipping the folder to two-way pushes them.
+
+`peerhub commit` is an explicit push and runs two-way for that one pass, so a one-way folder
+can still be committed from the terminal.
 
 ### Repository README
 
@@ -123,19 +144,20 @@ there is still exactly one writer. Run it from inside a folder linked to a repo.
 npm run cli -- status          # or: node bin/peerhub.mjs status, or npm link → peerhub
 ```
 
-| Command                                        | What it does                                                                                    |
-| ---------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `peerhub ping`                                 | Is the app up, and does the token work?                                                         |
-| `peerhub status`                               | Branch, HEAD, and the changelist: untracked / modified / deleted, plus `.gitignore` filtering   |
-| `peerhub commit -m "msg"`                      | Pushes the folder through sync, then records a commit with its changelist and content snapshots |
-| `peerhub log [-n 20]`                          | History, newest first, with `+added ~modified -deleted` per commit                              |
-| `peerhub show <sha>`                           | One commit, its parent and its full changelist (short shas work)                                |
-| `peerhub restore <sha> [paths…]`               | Writes that commit back into the folder; with no paths the folder is made to match that commit  |
-| `peerhub sync`                                 | One manual reconcile                                                                            |
-| `peerhub auto on\|off [--commit]`              | Periodic sync; `--commit` records a checkpoint commit on every pass that moves files            |
-| `peerhub repos`                                | Repositories, their linked folders and HEAD                                                     |
-| `peerhub create <name> [--path .] [--private]` | New repo + link the folder + first sync                                                         |
-| `peerhub rm <path>`                            | Delete a path locally and in the repo                                                           |
+| Command                                        | What it does                                                                                              |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `peerhub ping`                                 | Is the app up, and does the token work?                                                                   |
+| `peerhub status`                               | Branch, direction, HEAD, and the changelist: untracked / modified / deleted, plus `.gitignore` filtering  |
+| `peerhub commit -m "msg"`                      | Pushes the folder (two-way for this run), then records a commit with its changelist and content snapshots |
+| `peerhub log [-n 20]`                          | History, newest first, with `+added ~modified -deleted` per commit                                        |
+| `peerhub show <sha>`                           | One commit, its parent and its full changelist (short shas work)                                          |
+| `peerhub restore <sha> [paths…]`               | Writes that commit back into the folder; with no paths the folder is made to match that commit            |
+| `peerhub sync [--push]`                        | One manual reconcile; `--push` also pushes local changes for that run only                                |
+| `peerhub direction one-way\|two-way`           | How the linked folder may move: receive only (default) or push too                                        |
+| `peerhub auto on\|off [--commit]`              | Periodic sync; `--commit` records a checkpoint commit and turns the folder two-way                        |
+| `peerhub repos`                                | Repositories, their direction, linked folders and HEAD                                                    |
+| `peerhub create <name> [--path .] [--private]` | New repo + link the folder + first sync                                                                   |
+| `peerhub rm <path>`                            | Delete a path locally and in the repo                                                                     |
 
 **How it fits together**
 

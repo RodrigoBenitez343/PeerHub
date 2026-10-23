@@ -7,7 +7,8 @@
 //   peerhub log [-n 20]
 //   peerhub show <sha>
 //   peerhub restore <sha> [paths...] [--dry-run]
-//   peerhub sync
+//   peerhub sync [--push]
+//   peerhub direction one-way|two-way
 //   peerhub auto on|off [--commit]
 //   peerhub repos
 //   peerhub create <name> [--path .] [--private]
@@ -30,7 +31,9 @@ const USAGE = `peerhub — talk to your running PeerHub from the terminal
   show <sha>                 one commit and what it changed
   restore <sha> [paths...]   write that commit's files back locally
       --dry-run              report what would change, write nothing
-  sync                       reconcile the linked folder with the repo now
+  sync [--push]              reconcile the linked folder with the repo now
+      --push                 also push local changes (one run, folder stays one-way)
+  direction one-way|two-way  how the linked folder is allowed to move
   auto on|off [--commit]     periodic sync; --commit keeps a changelist per pass
   repos                      repositories and their linked folders
   create <name> [--path d]   create a repo and link a folder to it
@@ -68,7 +71,14 @@ function fail(message) {
 }
 
 function parseArgs(argv) {
-	const flags = { json: false, dryRun: false, private: false, commit: false, limit: null };
+	const flags = {
+		json: false,
+		dryRun: false,
+		private: false,
+		commit: false,
+		push: false,
+		limit: null
+	};
 	const positional = [];
 	let url = process.env.PEERHUB_URL ?? 'http://localhost:5173';
 
@@ -78,6 +88,7 @@ function parseArgs(argv) {
 		else if (arg === '--dry-run') flags.dryRun = true;
 		else if (arg === '--private') flags.private = true;
 		else if (arg === '--commit') flags.commit = true;
+		else if (arg === '--push') flags.push = true;
 		else if (arg === '--url') url = argv[++i];
 		else if (arg === '-m' || arg === '--message') flags.message = argv[++i];
 		else if (arg === '-n') flags.limit = Number(argv[++i]);
@@ -139,6 +150,9 @@ function printStatus(result, cwd) {
 	lines.push(`Folder      ${result.repo.path}`);
 	lines.push(`Branch      ${result.repo.branch}`);
 	lines.push(
+		`Direction   ${result.direction === 'two-way' ? 'two-way (may push)' : 'one-way (receives only)'}`
+	);
+	lines.push(
 		result.head
 			? `HEAD        ${result.head.short}  ${result.head.message}  (${when(result.head.ts)})`
 			: 'HEAD        no commits yet'
@@ -159,6 +173,14 @@ function printStatus(result, cwd) {
 		group('Modified — tracked, changed on disk', 'modified');
 		group('Deleted — tracked, gone from disk', 'removed');
 		lines.push('Commit with: peerhub commit -m "..."');
+		if (result.direction !== 'two-way') {
+			lines.push('');
+			lines.push('This folder is one-way: these changes are local only.');
+			lines.push('Push them with: peerhub commit -m "..."  (or: peerhub direction two-way)');
+			if (!result.canPush) {
+				lines.push('The repo owner has not enabled peer writes, so a push will be refused.');
+			}
+		}
 	}
 
 	if (result.repo.path !== cwd && !cwd.startsWith(result.repo.path)) {
@@ -220,8 +242,12 @@ function printRestore(result) {
 function printSummary(summary) {
 	console.log(
 		`sync: +${summary.added} ~${summary.updated} -${summary.deleted}` +
-			(summary.conflicts ? ` conflicts:${summary.conflicts}` : '')
+			(summary.conflicts ? ` conflicts:${summary.conflicts}` : '') +
+			(summary.skipped ? ` local-only:${summary.skipped}` : '')
 	);
+	if (summary.skipped) {
+		console.log('  these changes stayed local — the folder is one-way (peerhub direction two-way)');
+	}
 	for (const error of summary.errors ?? []) console.log(`  error: ${error}`);
 }
 
@@ -290,8 +316,26 @@ switch (cmd) {
 	}
 
 	case 'sync':
-		await send({ cmd: 'sync' }, printSummary);
+		await send({ cmd: 'sync', push: flags.push }, printSummary);
 		break;
+
+	case 'direction': {
+		const wanted = rest[0];
+		if (wanted !== 'one-way' && wanted !== 'two-way') {
+			fail('usage: peerhub direction one-way|two-way');
+		}
+		await send(
+			{ cmd: 'direction', direction: wanted === 'two-way' ? 'two-way' : 'pull' },
+			(result) => {
+				console.log(
+					result.direction === 'two-way'
+						? `${result.pair} — two-way: local changes can be pushed`
+						: `${result.pair} — one-way: receives changes only`
+				);
+			}
+		);
+		break;
+	}
 
 	case 'auto': {
 		const mode = rest[0] === 'off' ? 'off' : 'on';
@@ -312,7 +356,9 @@ switch (cmd) {
 			for (const repo of repos) {
 				const head = repo.head ?? 'no commits';
 				const where = repo.pairs.length ? repo.pairs.join(', ') : '(not linked to a folder)';
-				console.log(`${repo.name}  [${repo.visibility}]  ${head}  peers:${repo.peers}`);
+				console.log(
+					`${repo.name}  [${repo.visibility}]  ${repo.writeMode === 'peers' ? 'two-way' : 'one-way'}  ${head}  peers:${repo.peers}`
+				);
 				console.log(`  ${repo.id}`);
 				console.log(`  ${where}`);
 			}

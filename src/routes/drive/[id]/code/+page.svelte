@@ -60,6 +60,7 @@
 		visibility={data.repo.visibility}
 		active="code"
 		isGuest={data.drive.isGuest}
+		canWrite={data.drive.canWrite}
 		forkedFrom={data.repo.forkedFrom}
 	/>
 
@@ -106,7 +107,7 @@
 					</form>
 				{/if}
 
-				{#if data.metaWritable && data.branch !== data.repo.defaultBranch}
+				{#if data.metaWritable && data.drive.canWrite && data.branch !== data.repo.defaultBranch}
 					<form
 						method="POST"
 						action="?/removeBranch"

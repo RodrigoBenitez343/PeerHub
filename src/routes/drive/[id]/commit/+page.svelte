@@ -37,6 +37,7 @@
 		visibility={data.repo.visibility}
 		active="commit"
 		isGuest={data.drive.isGuest}
+		canWrite={data.drive.canWrite}
 		forkedFrom={data.repo.forkedFrom}
 	/>
 
