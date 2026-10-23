@@ -16,24 +16,52 @@ gap list live in [`spec/PEERHUB_MVP.md`](spec/PEERHUB_MVP.md).
 Early. It runs, and the flows below work end to end, but it is not a GitHub replacement
 yet. Known gaps are listed near the bottom instead of being quietly skipped.
 
-## Quick start
+## Setup
+
+Node 22+ and npm. Nothing else — Electron downloads itself on install.
 
 ```bash
-npm install
-npm run dev            # http://localhost:5173
+npm install            # dependencies, including the Electron binary
+npm run desktop        # build, then open the app window
 ```
 
-On Windows use `run.bat`, on macOS/Linux `run.sh`. Both refuse to start a second instance
-(the app binds one port; a listening port means it is already up) and install dependencies
-on first run.
+That is the whole setup. Pick the target you need:
 
-The web UI and the desktop/mobile build share the same server code:
+| Goal                    | Command                 | Output                                                         |
+| ----------------------- | ----------------------- | -------------------------------------------------------------- |
+| Open the app            | `npm run desktop`       | window, no terminal needed                                     |
+| Develop with hot reload | `npm run desktop:dev`   | Vite + window                                                  |
+| Browser only            | `npm run dev`           | http://localhost:5173                                          |
+| Installable app         | `npm run dist`          | `dist/PeerHub Setup <version>.exe` (NSIS), `.dmg`, `.AppImage` |
+| Unpacked app            | `npm run dist:dir`      | `dist/win-unpacked/PeerHub.exe`                                |
+| Headless boot check     | `npm run desktop:smoke` | prints the served URL + title, exits 0/1                       |
+
+`run.bat` (Windows) / `run.sh` (macOS, Linux) wrap `npm run desktop:dev`, install dependencies
+on first run, and refuse a second instance.
+
+### Both at once: the app and the terminal
+
+Start the app normally (double-click the installed app, or `npm run desktop`). Then, from any
+folder linked to a repo:
 
 ```bash
-npm run build                              # vite build
-npm run make:darwin-arm64                  # bare-build desktop bundle
-npm run make:android-arm64                 # bare-build android bundle
+npm run cli -- status                  # what changed vs HEAD
+npm run cli -- commit -m "what changed"
+npm run cli -- sync --push
 ```
+
+Or drop the `npm run cli --` prefix once per machine:
+
+```bash
+npm link                               # then: peerhub status, peerhub commit -m "..."
+```
+
+The CLI is a client: it talks to the running app over loopback and reads the app's port from
+`<data-dir>/.cli-url`, so there is no `--url` to pass. Both can be open at the same time — the
+app stays the only writer. Full command list: [Terminal](#terminal).
+
+The desktop app runs the SvelteKit server **in the Electron main process** and points the window
+at a random loopback port. No sidecar, no external Node, no terminal.
 
 Data lives outside the repo, in the platform data dir under `ghost-drive/`:
 
@@ -49,6 +77,24 @@ to start over as a new peer.
 > and storage identities, not branding. Renaming any of them would give this peer a new
 > identity and orphan every existing repo, so they keep their original names. New invites use
 > `peerhub://`; older `ghostdrive://` links still parse.
+
+### Project layout
+
+```
+desktop/              Electron main process (window, menu, in-process HTTP server)
+scripts/              build-schema.cjs, dev-desktop.mjs, clean.mjs
+cli/                  the `peerhub` terminal client
+src/                  SvelteKit app
+  lib/server/         all peer/storage logic (no UI imports)
+  lib/components/     UI components
+  routes/             /, /explore, /drive/[id]/{code,commit,settings,preview}, /api/*
+packages/picker/      platform-conditional file picker (Android SAF, no-op elsewhere)
+spec/                 generated hyperschema + hyperdb definitions (never hand-edited)
+resources/            app icons (icon.png, icon.ico)
+```
+
+Rule of thumb: `src/lib/server/**` never imports a component or a `$app/*` module, and
+`desktop/**` never imports app code directly — it only starts `build/handler.js`.
 
 ## What works today
 
@@ -141,7 +187,7 @@ The CLI talks to the running app over localhost; it never opens the corestore it
 there is still exactly one writer. Run it from inside a folder linked to a repo.
 
 ```bash
-npm run cli -- status          # or: node bin/peerhub.mjs status, or npm link → peerhub
+npm run cli -- status          # or: node cli/peerhub.mjs status, or npm link → peerhub
 ```
 
 | Command                                        | What it does                                                                                              |
@@ -183,7 +229,7 @@ npm run cli -- status          # or: node bin/peerhub.mjs status, or npm link �
 | Symptom                                         | Cause and fix                                                                                                                                                                                                                       |
 | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `File descriptor could not be locked`           | Two app instances are opening the same corestore. In dev mode an HMR reload can spawn a second one while the first still holds the store. Close the terminal and start the app again — only one process may own the data directory. |
-| `Cannot reach PeerHub at http://localhost:5173` | The app is not running, or it is on another port. Start it, or pass `--url http://localhost:<port>` (or set `PEERHUB_URL`).                                                                                                         |
+| `Cannot reach PeerHub at http://localhost:5173` | The app is not running, or it is on another port. The desktop app writes its URL to `<data-dir>/.cli-url` and the CLI reads it; in dev, pass `--url http://localhost:<port>` (or set `PEERHUB_URL`).                                |
 | `No CLI token at …/.cli-token`                  | The app has never opened its data directory. Start it once; the token is written on boot. `PEERHUB_TOKEN` overrides the file.                                                                                                       |
 | `PeerHub: Invalid CLI token`                    | The token file changed (fresh data dir) or the command ran against another machine. Re-read `<data-dir>/.cli-token`.                                                                                                                |
 | `No repository is linked to <folder>`           | That folder is not a sync target. Link it in the repo's Settings tab, or run `peerhub create <name> --path .`. The error lists the folders that are linked.                                                                         |
@@ -247,38 +293,45 @@ gap list.
 | `src/lib/server/cli.ts`              | terminal operations: status, commit, restore, sync, auto, create, rm                  |
 | `src/lib/server/history.ts`          | commit content snapshots and restoring them into a folder                             |
 | `src/lib/server/paths.ts`            | the reserved `/.peerhub` area that holds history, never repo content                  |
+| `src/lib/server/data-dir.ts`         | the one place that decides where the data directory lives                             |
 | `src/lib/server/cli-token.ts`        | local token that guards the CLI endpoint                                              |
-| `bin/peerhub.mjs`                    | the `peerhub` binary (npm `bin`)                                                      |
-| `src/routes/api/cli/+server.ts`      | the endpoint the CLI talks to (token-gated)                                           |
-| `build.cjs`                          | hyperschema definitions → `spec/hyperschema`, `spec/hyperdb`                          |
+| `cli/peerhub.mjs`                    | the `peerhub` binary (npm `bin`)                                                      |
+| `desktop/main.js`                    | Electron: single instance, in-process server, window, menu, `--smoke`                 |
+| `scripts/dev-desktop.mjs`            | Vite + Electron for development                                                       |
+| `scripts/build-schema.cjs`           | hyperschema definitions → `spec/hyperschema`, `spec/hyperdb`                          |
+| `electron-builder.yml`               | packaging: files, asar, icons, per-OS targets                                         |
 | `src/routes/`                        | `/` dashboard, `/explore`, `/drive/[id]` with `code`, `commit`, `settings`, `preview` |
 
 Schema is generated, never hand-edited:
 
 ```bash
-npm run build:schema    # node build.cjs — bump version, regenerate spec/*
+npm run build:schema    # node scripts/build-schema.cjs — bump version, regenerate spec/*
 ```
 
 Fields are appended, not reordered: hyperschema identifies them by position.
 
 ## Commands
 
-| Command                                            | What it does                                                              |
-| -------------------------------------------------- | ------------------------------------------------------------------------- |
-| `npm run dev`                                      | Vite dev server                                                           |
-| `npm run cli -- <cmd>`                             | Terminal CLI (also `node bin/peerhub.mjs`, or `peerhub` after `npm link`) |
-| `npm run build`                                    | Production build                                                          |
-| `npm run preview`                                  | Preview the production build                                              |
-| `npm run build:schema`                             | Regenerate the HyperDB schema                                             |
-| `npm run check`                                    | `svelte-check` over the project                                           |
-| `npm run format` / `npm run lint`                  | Prettier write / check (lint is the CI gate, with the build)              |
-| `npm run make:darwin-arm64` / `make:android-arm64` | Native bundles via `bare-build`                                           |
-| `npm run clean`                                    | Remove `out`, `build`, `.svelte-kit`                                      |
+| Command                   | What it does                                                              |
+| ------------------------- | ------------------------------------------------------------------------- |
+| `npm run desktop`         | Build, then open the app window                                           |
+| `npm run desktop:dev`     | Vite + Electron, hot reload                                               |
+| `npm run desktop:smoke`   | Headless boot check: server + `/` fetch, exit code 0/1                    |
+| `npm run dist`            | Installer via electron-builder                                            |
+| `npm run dist:dir`        | Unpacked app in `dist/`, no installer                                     |
+| `npm run dev`             | Vite dev server only (browser)                                            |
+| `npm run cli -- <cmd>`    | Terminal CLI (also `node cli/peerhub.mjs`, or `peerhub` after `npm link`) |
+| `npm run build`           | Production build (adapter-node → `build/`)                                |
+| `npm run build:schema`    | Regenerate the HyperDB schema                                             |
+| `npm run check`           | `svelte-check` over the project                                           |
+| `npm run format` / `lint` | Prettier write / check (lint is the CI gate, with the build)              |
+| `npm run clean`           | Remove `build`, `dist`, `.svelte-kit`                                     |
 
 ## Tech stack
 
-- **SvelteKit 2 / Svelte 5**, Vite, Tailwind CSS 4
-- **bare** runtime with **bare-build** for the desktop and Android bundles
+- **SvelteKit 2 / Svelte 5** with **adapter-node**, Vite, Tailwind CSS 4
+- **Electron 40** — desktop window; the SvelteKit server runs in the main process
+- **electron-builder** — NSIS / dmg / AppImage packaging
 - **corestore** — keys, storage, replication sessions
 - **hyperswarm** — DHT discovery and encrypted connections
 - **hyperdrive** — content-addressed replicated files
@@ -306,6 +359,10 @@ Honest list, all of it planned work rather than hidden behaviour:
 - **Ordering is enforced client-side.** A third-party client that uploads files in arbitrary
   order can land an ignored file before its `.gitignore` exists; the server cannot
   retro-delete it.
+- **Desktop packaging is only proven on Windows.** `npm run dist` produced
+  `dist/PeerHub Setup 0.1.0.exe` here, and both the unpacked app and `--smoke` ran against the
+  real data directory. The macOS dmg and Linux AppImage targets are configured but were not built
+  in this environment; CI builds all three on a tag.
 - **Commit authorship is a raw key.** Profiles exist, but the UI shows the first 8 hex
   characters instead of a handle, and there is no profile editor yet.
 - **The only way to change a `.gitignore` is to upload it again.** No in-app file editor.
@@ -313,7 +370,6 @@ Honest list, all of it planned work rather than hidden behaviour:
   there is no staging area/index: `commit` takes everything the folder changed.
 - **Markdown is a deliberate subset.** No raw HTML blocks, footnotes, reference-style links or
   syntax highlighting. Mermaid is the one rich feature, and it ships as a lazy-loaded chunk.
-- **Android launcher icons are stale** (`resources/android/mipmap-*`); the web and desktop
-  icons are current.
-- **No tests in the repo.** `npm test` points at a `test/` folder that does not exist yet;
-  verification so far has been scripted HTTP round trips and browser checks.
+- **No unit tests in the repo.** The automated check is `npm run desktop:smoke` (boots the server,
+  fetches `/`, asserts the title, exits non-zero on failure); everything else has been scripted
+  HTTP round trips and browser checks.

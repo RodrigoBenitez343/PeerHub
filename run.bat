@@ -1,7 +1,8 @@
 @echo off
-rem Launch PeerHub from this folder. Refuses to start a second instance:
-rem the app always binds its own port (strictPort), so a listening port means
-rem one is already up - the OS frees it when that window closes, crash or not.
+rem Launch PeerHub from this folder, in development mode (Vite + the Electron window).
+rem Refuses to start a second instance: Vite binds the port below with --strictPort,
+rem so a listening port means one is already up - the OS frees it when that window
+rem closes, crash or not.
 rem Optional args replace the default command, e.g. "run.bat npm run build".
 
 setlocal EnableExtensions
@@ -23,7 +24,7 @@ if not exist "node_modules" (
 )
 
 if "%~1"=="" (
-	call npm run dev -- --port %PORT% --strictPort
+	call npm run desktop:dev
 ) else (
 	call %*
 )

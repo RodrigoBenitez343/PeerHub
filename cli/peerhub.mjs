@@ -19,9 +19,9 @@
 // folders, `peerhub create` links one for you).
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { dataDir } from '../shared/data-dir.js';
 
 const USAGE = `peerhub — talk to your running PeerHub from the terminal
 
@@ -41,15 +41,7 @@ const USAGE = `peerhub — talk to your running PeerHub from the terminal
   rm <path>                  delete a path locally and in the repo
   ping                       is the app running (and does the token work)
 
-Global flags: --json (raw output), --url <url> (default http://localhost:5173)`;
-
-function dataDir() {
-	const home = os.homedir();
-	if (process.platform === 'win32') return path.join(process.env.APPDATA ?? home, 'ghost-drive');
-	if (process.platform === 'darwin')
-		return path.join(home, 'Library', 'Application Support', 'ghost-drive');
-	return path.join(process.env.XDG_DATA_HOME ?? path.join(home, '.local', 'share'), 'ghost-drive');
-}
+Global flags: --json (raw output), --url <url> (default: the running app's URL, else http://localhost:5173)`;
 
 function token() {
 	const fromEnv = process.env.PEERHUB_TOKEN;
@@ -60,8 +52,45 @@ function token() {
 	} catch {
 		fail(
 			`No CLI token at ${file}.\n` +
-				'Start the app once (run.bat / run.sh / npm run dev); it writes the token on boot.'
+				'Start the app once (run.bat / run.sh / npm run desktop); it writes the token on boot.'
 		);
+	}
+}
+
+// The desktop app picks a random loopback port and writes it to `.cli-url`
+// (`url`, then its pid) on boot, so the CLI finds the running instance without
+// being told. An explicit --url wins, then PEERHUB_URL, then the file, then the
+// dev-server default. A file whose process is gone is ignored and cleaned up:
+// a hard kill skips the app's own cleanup.
+function resolveEndpoint(override) {
+	if (override) return override;
+	if (process.env.PEERHUB_URL) return process.env.PEERHUB_URL;
+
+	const file = path.join(dataDir(), '.cli-url');
+	try {
+		const [fromApp, pid] = fs.readFileSync(file, 'utf8').trim().split(/\r?\n/);
+		if (fromApp) {
+			if (pid && !processAlive(Number(pid))) {
+				try {
+					fs.unlinkSync(file);
+				} catch {}
+			} else {
+				return fromApp;
+			}
+		}
+	} catch {
+		// No running desktop app.
+	}
+	return 'http://localhost:5173';
+}
+
+function processAlive(pid) {
+	if (!Number.isInteger(pid) || pid <= 0) return true; // No pid recorded: trust it.
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (err) {
+		return err?.code === 'EPERM'; // Exists, owned by someone else.
 	}
 }
 
@@ -80,7 +109,7 @@ function parseArgs(argv) {
 		limit: null
 	};
 	const positional = [];
-	let url = process.env.PEERHUB_URL ?? 'http://localhost:5173';
+	let url = null;
 
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
@@ -253,9 +282,10 @@ function printSummary(summary) {
 
 // --- main ---
 
-const { flags, positional, url } = parseArgs(process.argv.slice(2));
+const { flags, positional, url: urlOverride } = parseArgs(process.argv.slice(2));
 const [cmd, ...rest] = positional;
 const cwd = process.cwd();
+const url = resolveEndpoint(urlOverride);
 
 if (flags.help || !cmd || cmd === 'help') {
 	console.log(USAGE);

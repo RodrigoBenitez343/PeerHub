@@ -2,8 +2,8 @@ const Hyperschema = require('hyperschema');
 const HyperDB = require('hyperdb/builder');
 const path = require('path');
 
-const SCHEMA_DIR = path.join(__dirname, 'spec', 'hyperschema');
-const DB_DIR = path.join(__dirname, 'spec', 'hyperdb');
+const SCHEMA_DIR = path.join(__dirname, '..', 'spec', 'hyperschema');
+const DB_DIR = path.join(__dirname, '..', 'spec', 'hyperdb');
 
 // --- Hyperschema structs ---
 const schema = Hyperschema.from(SCHEMA_DIR);

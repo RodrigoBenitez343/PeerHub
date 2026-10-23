@@ -8,27 +8,46 @@ on:
     branches: [main]
 
 jobs:
-  lint:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - uses: holepunchto/actions/bare-base@v1
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
       - run: npm run lint
+      - run: npm run build
+      # Boots the real Electron main process (no window), serves `/`, exits 0/1.
+      - run: xvfb-run --auto-servernum npx electron . --smoke --no-sandbox
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-log
+          path: |
+            *.log
+          if-no-files-found: ignore
 
-  release:
+  package:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: lint
-    runs-on: macos-latest
-    permissions:
-      contents: write
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: holepunchto/actions/bare-base@v1
-      - run: npm run build:all
-      - name: Package artifacts
-        run: |
-          cd out
-          tar -czf peerhub-${{ github.ref_name }}-darwin-arm64.tar.gz darwin-arm64/PeerHub.app
-          tar -czf peerhub-${{ github.ref_name }}-android-arm64.tar.gz android-arm64/PeerHub.apk
-      - run: gh release create ${{ github.ref_name }} out/peerhub-${{ github.ref_name }}-darwin-arm64.tar.gz out/peerhub-${{ github.ref_name }}-android-arm64.tar.gz --generate-notes
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npm run dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: peerhub-${{ matrix.os }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.AppImage
+          if-no-files-found: error

@@ -860,3 +860,43 @@ default is **owner → peers**, then **newest → oldest**.
   three-line check in each RPC handler, and the client-side state is covered.
 - Private repos do not announce a drive key, so a policy change reaches them on reconnect or
   via the Settings → Re-check button, not through the announcement path.
+
+---
+
+## 17. Desktop shell (Electron) and project layout
+
+The bare/Android bundling pipeline is gone: its Windows runtime died before executing JavaScript
+(see the git history for the investigation), and it forced a second runtime, a second adapter and
+a `bare` condition on every Node builtin.
+
+**Shell**
+
+- `@sveltejs/adapter-node` emits `build/handler.js`; `desktop/main.js` wraps it in a
+  `node:http` server on a random loopback port and loads that URL in a `BrowserWindow`.
+- One process tree. No sidecar, no Node install on the user's machine, no terminal.
+- `npm run desktop` builds and opens; `npm run desktop:dev` runs Vite + Electron with hot reload;
+  `npm run dist` packages (NSIS Windows, dmg macOS, AppImage Linux).
+- `npm run desktop:smoke` is the automated boot check: start the server, `fetch('/')`, assert the
+  title, exit 0/1. CI runs it under `xvfb-run`.
+- Single instance via `app.requestSingleInstanceLock()`, which also protects the corestore lock.
+  External links open in the system browser (`setWindowOpenHandler` + `will-navigate`); the window
+  itself never navigates away.
+- The shell writes `<data-dir>/.cli-url` on listen and removes it on quit, so `peerhub` finds the
+  running app without a `--url` flag.
+
+**Layout**
+
+```
+desktop/        Electron main (no app imports; only build/handler.js)
+shared/         data-dir.js, imported by the server, the shell and the CLI
+scripts/        build-schema.cjs, dev-desktop.mjs, clean.mjs
+cli/            peerhub client
+src/lib/server/ peer logic (no components, no $app imports)
+src/routes/     UI + HTTP endpoints
+resources/      icon.png (256+), icon.ico (committed, multi-size  electron-builder's pngico
+                converter OOMs on this toolchain)
+```
+
+**Why not Neutralino/Tauri as the first shell:** both need the server as a sidecar process,
+because neither embeds a JS runtime. Electron embeds Node, so the server runs in the main process
+with no extra binary, no port handshake and no orphaned child on a hard kill.

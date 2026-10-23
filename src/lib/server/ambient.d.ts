@@ -178,11 +178,6 @@ declare module 'b4a' {
 	export function concat(buffers: Array<Buffer | Uint8Array>, length?: number): Buffer;
 }
 
-declare module 'bare-storage' {
-	const storage: { persistent(): string; ephemeral(): string };
-	export default storage;
-}
-
 declare module 'ghost-picker' {
 	export function pickerAvailable(): boolean;
 	export function downloadToDocument(

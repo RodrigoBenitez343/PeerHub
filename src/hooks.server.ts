@@ -1,17 +1,16 @@
 import type { Handle } from '@sveltejs/kit';
 import { building } from '$app/environment';
 import PeerHubApp from '$lib/server/app.js';
-import storage from 'bare-storage';
-import path from 'path';
+import { dataDir } from '$lib/server/data-dir.js';
 import process from 'process';
 
 let app: any = null;
 
 if (!building && !app) {
 	// The data directory keeps its original name on purpose: it holds this peer's
-	// corestore identity (`createKeyPair('ghost-drive')`), so renaming it here
+	// corestore identity (`createKeyPair('ghost-drive')`), so renaming it there
 	// would look like a brand-new peer and orphan every existing repo.
-	const dir = path.join(storage.persistent(), 'ghost-drive');
+	const dir = dataDir();
 	console.log('[boot] data dir:', dir);
 	const started = Date.now();
 	app = new PeerHubApp({ dir });

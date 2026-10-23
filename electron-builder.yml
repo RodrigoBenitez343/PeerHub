@@ -1,0 +1,58 @@
+# electron-builder — https://www.electron.build/configuration
+#
+# The SvelteKit server is bundled into the app (build/), so there is no
+# sidecar process to declare: desktop/main.js imports build/handler.js.
+appId: io.peerhub.app
+productName: PeerHub
+copyright: PeerHub contributors
+
+directories:
+  output: dist
+  buildResources: resources
+
+files:
+  - desktop/**/*
+  # The shell imports shared/data-dir.js at runtime, and the window icon is read
+  # from resources/ — both must be inside the package.
+  - shared/**/*
+  - build/**/*
+  - resources/icon.png
+  - package.json
+  - '!**/*.map'
+
+# sodium-native and rabin-native ship N-API .node prebuilds, which Electron
+# loads as-is (no rebuild, no ABI match). They must stay outside the asar
+# archive because dlopen cannot read from it.
+asar: true
+asarUnpack:
+  - '**/*.node'
+  - '**/prebuilds/**'
+
+npmRebuild: false
+
+win:
+  target:
+    - nsis
+  # A committed multi-size .ico: electron-builder's png→ico converter is
+  # unreliable (heap OOM on this toolchain), and Windows needs the real thing
+  # at 16/32/48 anyway. resources/icon.png stays for mac/linux.
+  icon: resources/icon.ico
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: PeerHub
+
+mac:
+  target:
+    - dmg
+  icon: resources/icon.png
+  category: public.app-category.developer-tools
+
+linux:
+  target:
+    - AppImage
+  icon: resources/icon.png
+  category: Development
+  maintainer: PeerHub contributors

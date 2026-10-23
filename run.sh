@@ -1,7 +1,8 @@
 #!/bin/sh
-# Launch PeerHub from this folder. A second launch is refused while the
-# first one holds .app-instance.lock, so instances never stack - the lock is
-# released by the kernel when the process exits, even after a hard kill.
+# Launch PeerHub from this folder in development mode (Vite + the Electron window).
+# A second launch is refused while the first one holds .app-instance.lock, so
+# instances never stack - the lock is released by the kernel when the process
+# exits, even after a hard kill.
 # Optional args replace the default command, e.g. "./run.sh npm run build".
 # PEERHUB_DEBUG=1 turns on shell tracing (GHOST_DRIVE_DEBUG is still accepted).
 
@@ -100,7 +101,7 @@ if [ ! -d node_modules ]; then
 fi
 
 if [ "$#" -eq 0 ]; then
-	set -- npm run dev -- --port 5173 --strictPort
+	set -- npm run desktop:dev
 fi
 
 exec "$@"

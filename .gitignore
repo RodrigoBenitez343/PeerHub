@@ -8,3 +8,4 @@ memory
 build
 .app-instance.lock
 .app-instance.pid
+dist
