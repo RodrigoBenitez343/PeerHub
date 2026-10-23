@@ -49,6 +49,15 @@ export interface SyncPairView extends SyncPair {
 	running: boolean;
 }
 
+/** One transferred file, reported live so the CLI can print a running list. */
+export interface SyncProgress {
+	kind: 'upload' | 'download' | 'delete';
+	path: string;
+	done: number;
+}
+
+export type SyncProgressFn = (ev: SyncProgress) => void;
+
 export interface SyncSummary {
 	added: number;
 	updated: number;
@@ -180,12 +189,15 @@ export default class SessionSync {
 		this.save();
 	}
 
-	async run(id: string, options: { direction?: SyncDirection } = {}): Promise<SyncSummary> {
+	async run(
+		id: string,
+		options: { direction?: SyncDirection; onProgress?: SyncProgressFn } = {}
+	): Promise<SyncSummary> {
 		const pair = this.pairs.find((p) => p.id === id);
 		if (!pair) throw new Error('Sync folder not found');
 		if (this.running.has(id)) throw new Error('This folder is already syncing');
 
-		return this.exclusive(pair, options.direction);
+		return this.exclusive(pair, options.direction, options.onProgress);
 	}
 
 	// Called when a peer connects: catch up on anything that moved meanwhile.
@@ -216,7 +228,11 @@ export default class SessionSync {
 		}
 	}
 
-	private async exclusive(pair: SyncPair, direction?: SyncDirection): Promise<SyncSummary> {
+	private async exclusive(
+		pair: SyncPair,
+		direction?: SyncDirection,
+		onProgress?: SyncProgressFn
+	): Promise<SyncSummary> {
 		this.running.add(pair.id);
 
 		try {
@@ -224,7 +240,8 @@ export default class SessionSync {
 				this.session,
 				pair,
 				this.stateFile(pair.id),
-				direction ?? pair.direction
+				direction ?? pair.direction,
+				onProgress
 			);
 			pair.lastSyncAt = Date.now();
 			pair.lastResult = formatSummary(summary);
@@ -304,7 +321,8 @@ async function syncOnce(
 	session: DriveSession,
 	pair: SyncPair,
 	stateFile: string,
-	direction: SyncDirection = 'pull'
+	direction: SyncDirection = 'pull',
+	onProgress?: SyncProgressFn
 ): Promise<SyncSummary> {
 	const drive = session.drive;
 	if (!drive) throw new Error('Drive not ready');
@@ -339,10 +357,12 @@ async function syncOnce(
 	// A mirrored folder is an upload: the same .gitignore rules that filter the
 	// browser upload apply here. Local rules are read too — on the first run the
 	// folder's .gitignore has not been shared yet, and that is exactly when a
-	// linked project would otherwise mirror its node_modules.
-	const ignore = await buildIgnore(session, local);
+	// linked project would otherwise mirror its node_modules. One walk feeds both
+	// the ignore rules and the file list, so a folder with a huge ignored tree is
+	// traversed once instead of twice.
+	const { files: localFiles, sources: localIgnore } = await localScan(local);
+	const ignore = await buildIgnore(session, local, localIgnore);
 
-	const localFiles = await localManifest(local);
 	const sharedFiles = new Map<string, SideStat>();
 	for (const file of await drive.manifestShared('/')) {
 		// `/.peerhub` is the repo's own history store, not content to mirror.
@@ -350,9 +370,16 @@ async function syncOnce(
 		sharedFiles.set(file.path, { size: file.size, mtime: file.mtime });
 	}
 
-	const localToShared = (filePath: string) =>
-		drive.putShared(filePath, local.createReadStream(filePath));
+	let transferred = 0;
+	const report = (kind: SyncProgress['kind'], filePath: string) =>
+		onProgress?.({ kind, path: filePath, done: ++transferred });
+
+	const localToShared = (filePath: string) => {
+		report('upload', filePath);
+		return drive.putShared(filePath, local.createReadStream(filePath));
+	};
 	const sharedToLocal = async (filePath: string) => {
+		report('download', filePath);
 		await writeIntoStream(local.createWriteStream(filePath), drive.readShared(filePath));
 	};
 
@@ -394,6 +421,15 @@ async function syncOnce(
 		// Ignored paths are left alone in both directions: never pushed, and
 		// never removed from the shared drive (that data is not ours to drop).
 		const ignored = ignore.ignored(filePath);
+
+		// An ignored path never travels: skip the copy and the two stat round-trips
+		// `record()` would spend tracking it, and drop any stale entry so an
+		// enormous ignored tree does not bloat the state file. Anything already in
+		// the repo still falls through below, left untouched.
+		if (ignored && !sharedFiles.has(filePath)) {
+			if (state[filePath]) delete state[filePath];
+			continue;
+		}
 
 		const localChanged = !unchanged(localStat, base?.local);
 		const sharedChanged = !unchanged(sharedStat, base?.shared);
@@ -444,6 +480,7 @@ async function syncOnce(
 					await localToShared(filePath);
 					summary.updated++;
 				} else if (!localStat && sharedStat) {
+					report('delete', filePath);
 					await drive.deleteShared(filePath);
 					summary.deleted++;
 				}
@@ -456,6 +493,7 @@ async function syncOnce(
 					await sharedToLocal(filePath);
 					summary.updated++;
 				} else if (!sharedStat && localStat) {
+					report('delete', filePath);
 					await local.del(filePath);
 					summary.deleted++;
 				}
@@ -482,7 +520,8 @@ async function syncOnce(
 // against the same rules the sync engine would apply.
 export async function buildIgnore(
 	session: DriveSession,
-	local: Localdrive
+	local: Localdrive,
+	localSources?: IgnoreSource[]
 ): Promise<IgnoreMatcher> {
 	const sources: IgnoreSource[] = [];
 
@@ -492,15 +531,19 @@ export async function buildIgnore(
 		// Shared rules unreachable: the local ones still apply.
 	}
 
-	for await (const entry of local.list('/')) {
-		if (!entry?.key || entry.value?.linkname) continue;
-		if (!entry.key.endsWith('/.gitignore')) continue;
-		try {
-			const text = await readLocalText(local, entry.key);
-			const base = entry.key.slice(0, entry.key.lastIndexOf('/')) || '/';
-			sources.push({ base, text });
-		} catch {
-			// Unreadable ignore file: the remaining rules still apply.
+	if (localSources) sources.push(...localSources);
+	else {
+		// No pre-collected rules: walk the folder for its own .gitignore files.
+		for await (const entry of local.list('/')) {
+			if (!entry?.key || entry.value?.linkname) continue;
+			if (!entry.key.endsWith('/.gitignore')) continue;
+			try {
+				const text = await readLocalText(local, entry.key);
+				const base = entry.key.slice(0, entry.key.lastIndexOf('/')) || '/';
+				sources.push({ base, text });
+			} catch {
+				// Unreadable ignore file: the remaining rules still apply.
+			}
 		}
 	}
 
@@ -520,20 +563,38 @@ async function readLocalText(local: Localdrive, filePath: string): Promise<strin
 	return Buffer.concat(chunks).subarray(0, MAX_IGNORE_BYTES).toString('utf-8');
 }
 
-async function localManifest(local: Localdrive): Promise<Map<string, SideStat>> {
-	const out = new Map<string, SideStat>();
+// One walk of the folder: every file's stat plus the text of each .gitignore.
+// The matcher itself is applied later in the sync loop, so ignored-by-rule files
+// still show up here (a rule change must be able to delete what an earlier run
+// uploaded); only system noise and the repo's own history are dropped up front.
+// ponytail: flat recursive list, so an ignored venv is still traversed; prune by
+// directory if a folder ever grows past a single walk being tolerable.
+async function localScan(
+	local: Localdrive
+): Promise<{ files: Map<string, SideStat>; sources: IgnoreSource[] }> {
+	const files = new Map<string, SideStat>();
+	const sources: IgnoreSource[] = [];
 
 	for await (const entry of local.list('/')) {
 		if (!entry?.key || entry.value?.linkname) continue;
+		if (entry.key.endsWith('/.gitignore')) {
+			try {
+				const text = await readLocalText(local, entry.key);
+				const base = entry.key.slice(0, entry.key.lastIndexOf('/')) || '/';
+				sources.push({ base, text });
+			} catch {
+				// Unreadable ignore file: the remaining rules still apply.
+			}
+		}
 		if (isIgnored(entry.key)) continue;
 		if (isReservedRepoPath(entry.key)) continue;
-		out.set(entry.key, {
+		files.set(entry.key, {
 			size: entry.value?.blob?.byteLength ?? 0,
 			mtime: typeof entry.mtime === 'number' ? entry.mtime : null
 		});
 	}
 
-	return out;
+	return { files, sources };
 }
 
 function unchanged(current: SideStat | undefined, previous: SideStat | undefined): boolean {

@@ -133,7 +133,7 @@ function parseArgs(argv) {
 	return { flags, positional, url };
 }
 
-async function call(url, method, payload) {
+async function call(url, method, payload, onProgress) {
 	const headers = { 'x-peerhub-token': token() };
 	let body;
 	if (payload) {
@@ -149,6 +149,37 @@ async function call(url, method, payload) {
 			`Cannot reach PeerHub at ${url} (${err?.message ?? err}).\n` +
 				'Is the app running? Start it with run.bat / run.sh / npm run dev.'
 		);
+	}
+
+	// NDJSON progress stream: one event per line while the command runs, the
+	// last line is the answer. Also keeps the connection busy, so a long sync
+	// cannot be killed by an idle timeout halfway through.
+	if ((res.headers.get('content-type') ?? '').includes('ndjson')) {
+		let final = null;
+		try {
+			const reader = res.body.getReader();
+			const decoder = new TextDecoder();
+			let buffer = '';
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				buffer += decoder.decode(value, { stream: true });
+				let nl;
+				while ((nl = buffer.indexOf('\n')) !== -1) {
+					const line = buffer.slice(0, nl).trim();
+					buffer = buffer.slice(nl + 1);
+					if (!line) continue;
+					const obj = JSON.parse(line);
+					if (obj.ok === undefined) onProgress?.(obj);
+					else final = obj;
+				}
+			}
+		} catch (err) {
+			fail(`Lost connection to PeerHub at ${url} mid-command (${err?.message ?? err}).`);
+		}
+		if (!final) fail('PeerHub closed the progress stream without an answer.');
+		if (final.ok === false) fail(`PeerHub: ${final.error}`);
+		return final;
 	}
 
 	const text = await res.text();
@@ -284,6 +315,14 @@ function printSummary(summary) {
 	for (const error of summary.errors ?? []) console.log(`  error: ${error}`);
 }
 
+// One line per transferred file, printed while the app works (ASCII marks:
+// plain consoles on Windows print these without turning them into mojibake).
+const PROGRESS_MARK = { upload: '^', download: 'v', delete: 'x' };
+
+function printProgress(ev) {
+	console.log(`  ${PROGRESS_MARK[ev.kind] ?? '*'} ${String(ev.done).padStart(5)}  ${ev.path}`);
+}
+
 // --- main ---
 
 const { flags, positional, url: urlOverride } = parseArgs(process.argv.slice(2));
@@ -296,8 +335,14 @@ if (flags.help || !cmd || cmd === 'help') {
 	process.exit(cmd || flags.help ? 0 : 1);
 }
 
-const send = async (payload, print) => {
-	const response = await call(url, 'POST', { cwd, ...payload });
+const send = async (payload, print, hint) => {
+	if (hint && !flags.json) console.log(hint);
+	const response = await call(
+		url,
+		'POST',
+		{ cwd, stream: true, ...payload },
+		flags.json ? undefined : printProgress
+	);
 	if (flags.json) {
 		console.log(JSON.stringify(response.result, null, 2));
 		return;
@@ -322,14 +367,18 @@ switch (cmd) {
 
 	case 'commit': {
 		const message = flags.message ?? rest.join(' ');
-		await send({ cmd: 'commit', message }, (result) => {
-			if (result.sync) printSummary(result.sync);
-			console.log(`[${result.short}] ${result.message}`);
-			for (const change of result.changes) {
-				const code = change.status === 'added' ? 'A' : change.status === 'modified' ? 'M' : 'D';
-				console.log(`  ${code}  ${change.path}`);
-			}
-		});
+		await send(
+			{ cmd: 'commit', message },
+			(result) => {
+				if (result.sync) printSummary(result.sync);
+				console.log(`[${result.short}] ${result.message}`);
+				for (const change of result.changes) {
+					const code = change.status === 'added' ? 'A' : change.status === 'modified' ? 'M' : 'D';
+					console.log(`  ${code}  ${change.path}`);
+				}
+			},
+			'Committing — pushing local changes…'
+		);
 		break;
 	}
 
@@ -350,7 +399,7 @@ switch (cmd) {
 	}
 
 	case 'sync':
-		await send({ cmd: 'sync', push: flags.push }, printSummary);
+		await send({ cmd: 'sync', push: flags.push }, printSummary, 'Syncing…');
 		break;
 
 	case 'direction': {
@@ -418,7 +467,8 @@ switch (cmd) {
 				console.log(`Linked   ${result.path}`);
 				console.log(`Synced   ${result.files} file(s)`);
 				console.log('Next: peerhub commit -m "initial commit"');
-			}
+			},
+			`Creating ${name} — syncing ${flags.path ? path.resolve(flags.path) : cwd}…`
 		);
 		break;
 	}

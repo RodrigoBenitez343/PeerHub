@@ -8,7 +8,12 @@ import Hyperbee from 'hyperbee2';
 import HyperDB from 'hyperdb';
 import def from '../../../spec/hyperdb/index.js';
 import SharedDrive, { READ_ONLY_MESSAGE } from './shared-drive.js';
-import SessionSync, { type SyncPairView, type SyncDirection, type SyncSummary } from './sync.js';
+import SessionSync, {
+	type SyncPairView,
+	type SyncDirection,
+	type SyncSummary,
+	type SyncProgressFn
+} from './sync.js';
 import { invalidateEntries } from './loaders.js';
 import { updateRepo } from './repos.js';
 import { broadcastAnnouncements } from './directory.js';
@@ -565,7 +570,10 @@ export default class DriveSession extends ReadyResource {
 		await this.requireSync().setDirection(id, direction);
 	}
 
-	async runSync(id: string, options: { direction?: SyncDirection } = {}): Promise<SyncSummary> {
+	async runSync(
+		id: string,
+		options: { direction?: SyncDirection; onProgress?: SyncProgressFn } = {}
+	): Promise<SyncSummary> {
 		return this.requireSync().run(id, options);
 	}
 

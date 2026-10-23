@@ -25,6 +25,28 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	}
 	if (!body?.cmd) throw error(400, 'Command required');
 
+	// Progress stream: one JSON line per event, last line is the answer. Long
+	// commands (create/sync/commit) would otherwise hold one silent request for
+	// minutes — enough for a client's idle timeout to kill it mid-sync.
+	if (body.stream) {
+		const encoder = new TextEncoder();
+		const stream = new ReadableStream({
+			async start(controller) {
+				const send = (obj: unknown) =>
+					controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'));
+				try {
+					const result = await runCli(app, body, (ev) => send({ event: 'progress', ...ev }));
+					send({ ok: true, result });
+				} catch (err: any) {
+					send({ ok: false, error: err?.message ?? String(err) });
+				} finally {
+					controller.close();
+				}
+			}
+		});
+		return new Response(stream, { headers: { 'content-type': 'application/x-ndjson' } });
+	}
+
 	try {
 		const result = await runCli(app, body);
 		return json({ ok: true, result });

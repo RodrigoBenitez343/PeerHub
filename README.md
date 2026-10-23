@@ -58,9 +58,13 @@ the one module it imports into `%LOCALAPPDATA%\PeerHub\` (macOS/Linux: `~/.peerh
 **user** PATH. No Node install is required — the app's executable doubles as the runtime via
 `ELECTRON_RUN_AS_NODE=1`. `peerhub` is installed alongside `ph`, so both spellings work.
 
-PATH is only read when a shell starts, so open a **new** terminal afterwards. Help → Command
-line tool (ph) shows the shim path and can reinstall it; `PeerHub.exe --install-cli` and
-`--uninstall-cli` do the same without opening a window.
+PATH is only read when a shell starts, and Explorer hands out its own copy of the environment,
+so two things keep this from needing a restart: the app broadcasts the environment change
+(Explorer re-reads PATH for whatever it launches next) and it also mirrors the shims into
+`%LOCALAPPDATA%\Microsoft\WindowsApps`, which is on the default user PATH and therefore already
+inside terminals that were opened before the install. Help → Command line tool (ph) shows the
+shim path and can reinstall it; `PeerHub.exe --install-cli` and `--uninstall-cli` do the same
+without opening a window.
 
 **From source** (before packaging, or when hacking on the CLI):
 
@@ -248,15 +252,15 @@ ph status          # installed app; from source: node cli/peerhub.mjs status
 
 ### Terminal troubleshooting
 
-| Symptom                                         | Cause and fix                                                                                                                                                                                                                        |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `File descriptor could not be locked`           | Two app instances are opening the same corestore. In dev mode an HMR reload can spawn a second one while the first still holds the store. Close the terminal and start the app again — only one process may own the data directory.  |
-| `Cannot reach PeerHub at http://localhost:5173` | The app is not running, or it is on another port. The desktop app writes its URL to `<data-dir>/.cli-url` and the CLI reads it; in dev, pass `--url http://localhost:<port>` (or set `PEERHUB_URL`).                                 |
-| `No CLI token at …/.cli-token`                  | The app has never opened its data directory. Start it once; the token is written on boot. `PEERHUB_TOKEN` overrides the file.                                                                                                        |
-| `PeerHub: Invalid CLI token`                    | The token file changed (fresh data dir) or the command ran against another machine. Re-read `<data-dir>/.cli-token`.                                                                                                                 |
-| `No repository is linked to <folder>`           | That folder is not a sync target. Link it in the repo's Settings tab, or run `peerhub create <name> --path .`. The error lists the folders that are linked.                                                                          |
-| `'ph' is not recognized`                        | The shims are written when the app starts, so launch the app once after installing, and open a new terminal (PATH is read at shell start). Manual fix: add `%LOCALAPPDATA%\PeerHub\bin` to PATH, or run `PeerHub.exe --install-cli`. |
-| History missing after deleting a repo           | Deleting a repo removes its records, not its folder: `sessions/<id>/` stays under the data directory. With the app stopped, delete that folder by hand to reclaim the space.                                                         |
+| Symptom                                         | Cause and fix                                                                                                                                                                                                                                                                                       |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `File descriptor could not be locked`           | Two app instances are opening the same corestore. In dev mode an HMR reload can spawn a second one while the first still holds the store. Close the terminal and start the app again — only one process may own the data directory.                                                                 |
+| `Cannot reach PeerHub at http://localhost:5173` | The app is not running, or it is on another port. The desktop app writes its URL to `<data-dir>/.cli-url` and the CLI reads it; in dev, pass `--url http://localhost:<port>` (or set `PEERHUB_URL`).                                                                                                |
+| `No CLI token at …/.cli-token`                  | The app has never opened its data directory. Start it once; the token is written on boot. `PEERHUB_TOKEN` overrides the file.                                                                                                                                                                       |
+| `PeerHub: Invalid CLI token`                    | The token file changed (fresh data dir) or the command ran against another machine. Re-read `<data-dir>/.cli-token`.                                                                                                                                                                                |
+| `No repository is linked to <folder>`           | That folder is not a sync target. Link it in the repo's Settings tab, or run `peerhub create <name> --path .`. The error lists the folders that are linked.                                                                                                                                         |
+| `'ph' is not recognized`                        | The shims are written when the app starts, so launch the app once after installing. If it still fails, the terminal predates the install and its PATH copy is stale: restart the app/terminal host, or run `PeerHub.exe --install-cli` again. Manual fix: add `%LOCALAPPDATA%\PeerHub\bin` to PATH. |
+| History missing after deleting a repo           | Deleting a repo removes its records, not its folder: `sessions/<id>/` stays under the data directory. With the app stopped, delete that folder by hand to reclaim the space.                                                                                                                        |
 
 ## How it works
 

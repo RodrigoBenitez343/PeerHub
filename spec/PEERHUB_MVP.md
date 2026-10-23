@@ -1003,8 +1003,15 @@ script.mjs` runs a plain Node process. That is the whole runtime requirement —
     `ELECTRON_RUN_AS_NODE=1 "<this exe>" "<the copied CLI>" %*`;
   - installs `ph` **and** `peerhub`, so the npm-bin spelling keeps working;
   - appends `bin` to the **user** PATH (`HKCU\Environment`, existing value type preserved),
-    only when it is absent. `PEERHUB_CLI_NO_PATH=1` skips that write for tests and locked-down
-    machines.
+    only when it is absent, then broadcasts `WM_SETTINGCHANGE`, because a terminal started from
+    the Start menu inherits Explorer's copy of the environment and never re-reads the registry
+    on its own. `PEERHUB_CLI_NO_PATH=1` skips the PATH write for tests and locked-down
+    machines;
+  - mirrors the shims into `%LOCALAPPDATA%\Microsoft\WindowsApps` when that folder is already
+    on the user PATH. That is what makes `ph` answer in terminals that were **already open**
+    before the install: their environment still has WindowsApps in it, so nothing has to be
+    restarted. Best effort, and `--uninstall-cli` removes only files that carry the generated
+    header.
 - Every file is rewritten only when its content changed, so an upgrade, a moved install or a
   fresh `npm run dist` re-points the shims at the executable that is actually running: a stale
   shim cannot outlive its binary.
@@ -1031,6 +1038,10 @@ installer at all. One code path covers Windows, macOS, Linux and AppImage, and
   commit with `A /README.md`; `ph log` and `ph repos` listed it. Git Bash resolves the
   extensionless `ph` shim too.
 - `--uninstall-cli` removes the shims and the PATH entry; `--install-cli` restores both.
+- In a shell whose PATH was captured **before** the install (a terminal host started earlier in
+  the day), `ph --help` and `ph ping` still resolved through the WindowsApps mirror, and
+  `ph ping` reached the running installed app (`PeerHub is running · 2 repo(s)`). This was the
+  exact failure reported: a new tab of an old terminal host, `ph : not recognized`.
 - `--smoke` still exits 0 (`200 title="PeerHub"`, `POST ?/refresh -> 200`).
 - With the app stopped and a stale `.cli-url`, `ph` prints "Cannot reach PeerHub at
   http://localhost:5173" and deletes the stale file.
@@ -1038,7 +1049,8 @@ installer at all. One code path covers Windows, macOS, Linux and AppImage, and
 **Limits**
 
 - PATH is read when a shell starts: terminals already open (and a Windows Terminal window that
-  predates the install) keep the old PATH until restarted.
+  predates the install) keep the old PATH until restarted — they are covered by the WindowsApps
+  mirror on Windows, and not at all on macOS/Linux.
 - macOS/Linux write the shim to `~/.peerhub/bin`; macOS does not put that on PATH by default,
   so the app reports the folder instead of editing shell rc files.
 - The CLI stays a client: with the app not running every command fails with the "start the

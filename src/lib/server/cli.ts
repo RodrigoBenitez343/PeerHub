@@ -21,7 +21,7 @@ import {
 	type TreeEntry
 } from './git.js';
 import { restoreCommit, type RestoreAction } from './history.js';
-import { buildIgnore } from './sync.js';
+import { buildIgnore, type SyncProgressFn } from './sync.js';
 import { isReservedRepoPath } from './paths.js';
 import { selfKeyHex } from './users.js';
 
@@ -162,7 +162,7 @@ export async function commitWorkingTree(
 	app: PeerHubApp,
 	cwd: string,
 	message: string,
-	options: { branch?: string } = {}
+	options: { branch?: string; onProgress?: SyncProgressFn } = {}
 ): Promise<CommitResult> {
 	if (!message?.trim()) throw new Error('Commit message required — pass -m "what changed"');
 
@@ -173,7 +173,10 @@ export async function commitWorkingTree(
 	// repo holds, and the sync engine is the one component that knows how to
 	// reconcile local edits, deletions and conflicts. Commit is an explicit push,
 	// so it runs two-way even when the folder is normally one-way.
-	const sync = await session.runSync(pair.id, { direction: 'two-way' });
+	const sync = await session.runSync(pair.id, {
+		direction: 'two-way',
+		onProgress: options.onProgress
+	});
 
 	const record = await commit(session, {
 		message,
@@ -268,12 +271,17 @@ export async function restore(
 export async function syncNow(
 	app: PeerHubApp,
 	cwd: string,
-	options: { push?: boolean } = {}
+	options: { push?: boolean; onProgress?: SyncProgressFn } = {}
 ): Promise<SyncSummary> {
 	const { session, pair } = await locateRepo(app, cwd);
 	// Default is whatever the folder is set to (one-way unless changed). `--push`
 	// asks for a push for this run only, without changing the pair.
-	return session.runSync(pair.id, options.push ? { direction: 'two-way' } : {});
+	return session.runSync(
+		pair.id,
+		options.push
+			? { direction: 'two-way', onProgress: options.onProgress }
+			: { onProgress: options.onProgress }
+	);
 }
 
 export interface DirectionReport {
@@ -372,7 +380,11 @@ export async function createRepo(
 	app: PeerHubApp,
 	name: string,
 	dir: string,
-	options: { visibility?: 'public' | 'private'; sync?: boolean } = {}
+	options: {
+		visibility?: 'public' | 'private';
+		sync?: boolean;
+		onProgress?: SyncProgressFn;
+	} = {}
 ): Promise<CreateReport> {
 	await app.ready();
 	const target = path.resolve(dir || '.');
@@ -385,7 +397,12 @@ export async function createRepo(
 	const pair = await session.addSyncPair(target);
 	// Creating a repo from a folder is an explicit push of that folder.
 	const summary =
-		options.sync === false ? null : await session.runSync(pair.id, { direction: 'two-way' });
+		options.sync === false
+			? null
+			: await session.runSync(pair.id, {
+					direction: 'two-way',
+					onProgress: options.onProgress
+				});
 
 	return {
 		id: session.id,
@@ -446,16 +463,22 @@ export interface CliRequest {
 	direction?: 'pull' | 'one-way' | 'two-way';
 	dryRun?: boolean;
 	limit?: number;
+	/** Ask for an NDJSON progress stream instead of one JSON answer. */
+	stream?: boolean;
 }
 
-export async function runCli(app: PeerHubApp, request: CliRequest): Promise<unknown> {
+export async function runCli(
+	app: PeerHubApp,
+	request: CliRequest,
+	onProgress?: SyncProgressFn
+): Promise<unknown> {
 	const cwd = request.cwd || process.cwd();
 
 	switch (request.cmd) {
 		case 'status':
 			return status(app, cwd);
 		case 'commit':
-			return commitWorkingTree(app, cwd, request.message ?? '');
+			return commitWorkingTree(app, cwd, request.message ?? '', { onProgress });
 		case 'log':
 			return log(app, cwd, request.limit ?? 20);
 		case 'show':
@@ -465,7 +488,7 @@ export async function runCli(app: PeerHubApp, request: CliRequest): Promise<unkn
 			if (!request.sha) throw new Error('commit sha required');
 			return restore(app, cwd, request.sha, request.paths ?? [], { dryRun: request.dryRun });
 		case 'sync':
-			return syncNow(app, cwd, { push: request.push });
+			return syncNow(app, cwd, { push: request.push, onProgress });
 		case 'auto':
 			return setAuto(app, cwd, request.mode ?? 'on', { commit: request.commit });
 		case 'direction':
@@ -481,7 +504,8 @@ export async function runCli(app: PeerHubApp, request: CliRequest): Promise<unkn
 		case 'create':
 			if (!request.name) throw new Error('Repository name required');
 			return createRepo(app, request.name, request.dir ?? cwd, {
-				visibility: request.visibility
+				visibility: request.visibility,
+				onProgress
 			});
 		case 'rm':
 			if (!request.paths?.length) throw new Error('Path required');
