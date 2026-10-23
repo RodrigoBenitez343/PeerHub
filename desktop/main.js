@@ -4,6 +4,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dataDir } from '../shared/data-dir.js';
+import { describeInstall, installCli, uninstallCli } from './cli-install.js';
 
 // PeerHub desktop shell.
 //
@@ -24,11 +25,16 @@ const ICON = path.join(root, 'resources', 'icon.png');
 const ENDPOINT_FILE = path.join(dataDir(), '.cli-url');
 
 const isSmoke = process.argv.includes('--smoke') || process.env.PEERHUB_SMOKE === '1';
+// Maintenance flags: install or remove the `ph` command without opening a
+// window. Also what an unattended repair (or a test) uses.
+const isInstallCli = process.argv.includes('--install-cli');
+const isUninstallCli = process.argv.includes('--uninstall-cli');
 const devUrl = process.env.PEERHUB_DEV_URL || null;
 
 let server = null;
 let win = null;
 let origin = null;
+let cliInstall = null;
 
 // adapter-node derives `url.origin` from the request headers and assumes **https**
 // when PROTOCOL_HEADER is unset. Everything here is plain HTTP on loopback, so
@@ -147,6 +153,53 @@ function createWindow() {
 	}
 }
 
+async function showCliDialog() {
+	cliInstall = cliInstall ?? installCli({ root, version: app.getVersion() });
+	const install = cliInstall;
+	const where = install.ok
+		? install.pathChanged
+			? 'Added the shim folder to your user PATH. Open a new terminal to pick it up.'
+			: install.pathError
+				? `PATH was not changed (${install.pathError}). Add this folder to PATH:\n${install.binDir}`
+				: 'Already on PATH. A terminal opened before the install may need a restart.'
+		: `Not installed: ${install.error}`;
+
+	const detail = install.ok
+		? [
+				'Any terminal can drive the running app:',
+				'',
+				'  ph init                 create a repo for the current folder',
+				'  ph status               what changed',
+				'  ph commit -m "message"  push changes and record a commit',
+				'  ph log                  history',
+				'',
+				`Shim    ${install.command}`,
+				`Folder  ${install.binDir}`,
+				'',
+				where
+			].join('\n')
+		: where;
+
+	const { response } = await dialog.showMessageBox({
+		type: install.ok ? 'info' : 'error',
+		title: 'PeerHub',
+		message: 'Terminal access: ph',
+		detail,
+		buttons: ['OK', install.ok ? 'Reinstall' : 'Try again'],
+		defaultId: 0,
+		cancelId: 0
+	});
+	if (response !== 1) return;
+
+	cliInstall = installCli({ root, version: app.getVersion() });
+	await dialog.showMessageBox({
+		type: cliInstall.ok ? 'info' : 'error',
+		title: 'PeerHub',
+		message: cliInstall.ok ? 'ph is installed' : 'Could not install ph',
+		detail: describeInstall(cliInstall)
+	});
+}
+
 function buildMenu() {
 	const isMac = process.platform === 'darwin';
 
@@ -181,7 +234,9 @@ function buildMenu() {
 							message: `PeerHub ${app.getVersion()}`,
 							detail: `Peer-to-peer code hosting.\n\nServing ${origin ?? devUrl ?? 'nothing yet'}`
 						})
-				}
+				},
+				{ type: 'separator' },
+				{ label: 'Command line tool (ph)', click: showCliDialog }
 			]
 		}
 	]);
@@ -190,12 +245,31 @@ function buildMenu() {
 // --- lifecycle ------------------------------------------------------------
 
 async function boot() {
+	if (isUninstallCli) {
+		const result = uninstallCli();
+		console.log(`[cli] ${describeInstall(result)}`);
+		app.exit(result.pathError ? 1 : 0);
+		return;
+	}
+
+	if (isInstallCli) {
+		const result = installCli({ root, version: app.getVersion() });
+		console.log(`[cli] ${describeInstall(result)}`);
+		app.exit(result.ok ? 0 : 1);
+		return;
+	}
+
 	if (isSmoke) {
 		await runSmoke();
 		return;
 	}
 
 	origin = devUrl ?? (await startServer());
+	// After the server exists: the command is a client, and `.cli-url` must be
+	// there before the first terminal asks for it. A failure here must never
+	// keep the app from opening.
+	cliInstall = installCli({ root, version: app.getVersion() });
+	console.log(`[cli] ${describeInstall(cliInstall)}`);
 	Menu.setApplicationMenu(buildMenu());
 	createWindow();
 }
@@ -244,7 +318,7 @@ function fail(err) {
 	app.exit(1);
 }
 
-if (!isSmoke && !app.requestSingleInstanceLock()) {
+if (!isSmoke && !isInstallCli && !isUninstallCli && !app.requestSingleInstanceLock()) {
 	// Corestore allows one writer per data directory, so a second window would
 	// only fail on the file lock anyway. Focus the first one instead.
 	app.quit();

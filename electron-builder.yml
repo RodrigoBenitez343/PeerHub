@@ -15,6 +15,9 @@ files:
   # The shell imports shared/data-dir.js at runtime, and the window icon is read
   # from resources/ — both must be inside the package.
   - shared/**/*
+  # The `ph` command is a copy of this file plus shared/data-dir.js, written into
+  # a per-user folder on boot (desktop/cli-install.js).
+  - cli/**/*
   - build/**/*
   - resources/icon.png
   - package.json

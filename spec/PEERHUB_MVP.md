@@ -725,7 +725,7 @@ branch page shows the same history → delete branch 303.
 
 **Shape**
 
-- `bin/peerhub.mjs` is a client. It POSTs a command to `/api/cli` on the running app and prints
+- `cli/peerhub.mjs` is a client. It POSTs a command to `/api/cli` on the running app and prints
   the result. It never opens the corestore, so the single-writer rule and every cache stay
   intact; the app must be running.
 - Auth: `x-peerhub-token` must equal `<data-dir>/.cli-token`, written by `cli-token.ts` on boot
@@ -976,3 +976,70 @@ not list every public repo. Four separate defects, all in production only or in 
   `POST ?/refresh -> 200` (exit 0).
 - This peer's real data dir: `Your repositories Â· 1`, `Public repositories Â· 1` (own, `yours`),
   `0 peers on the network`, and the form POST answered `200`.
+
+---
+
+## 19. The `ph` command in the packaged app (implemented)
+
+**Problem**
+
+The CLI only existed inside the source tree: `node cli/peerhub.mjs …` or `npm run cli -- …`. A
+user who installed `PeerHub Setup 0.1.0.exe` has no Node, no checkout and nowhere to type
+`npm`, so every terminal command in the README was unreachable for them.
+
+**Shape**
+
+- The Electron executable is also a Node runtime: `ELECTRON_RUN_AS_NODE=1 PeerHub.exe
+script.mjs` runs a plain Node process. That is the whole runtime requirement — no Node
+  install, no sidecar, no second download.
+- `desktop/cli-install.js` runs on every boot (and on `--install-cli`) and:
+  - copies `cli/peerhub.mjs` and `shared/data-dir.js` (its only import) into
+    `%LOCALAPPDATA%\PeerHub\{cli,shared}` (POSIX: `~/.peerhub/…`). The relative import is kept,
+    so the copy is self-contained;
+  - writes a `package.json` marker (`{"type":"module"}`) so the copied `.js` is not re-parsed
+    as ESM (with a warning) on every command;
+  - writes shims `bin\ph.cmd` (cmd.exe / PowerShell) and `bin\ph` (POSIX shell, for Git Bash,
+    which ignores PATHEXT), each running
+    `ELECTRON_RUN_AS_NODE=1 "<this exe>" "<the copied CLI>" %*`;
+  - installs `ph` **and** `peerhub`, so the npm-bin spelling keeps working;
+  - appends `bin` to the **user** PATH (`HKCU\Environment`, existing value type preserved),
+    only when it is absent. `PEERHUB_CLI_NO_PATH=1` skips that write for tests and locked-down
+    machines.
+- Every file is rewritten only when its content changed, so an upgrade, a moved install or a
+  fresh `npm run dist` re-points the shims at the executable that is actually running: a stale
+  shim cannot outlive its binary.
+- `--install-cli` / `--uninstall-cli` are maintenance flags: they bypass the single-instance
+  lock, never open a window, and exit 0/1. Help → "Command line tool (ph)" shows the paths and
+  reinstalls on demand.
+- `cli/peerhub.mjs` gained `init [name]`: create a repo for the current folder, name defaulting
+  to the folder name. `create` still insists on an explicit name.
+
+**Why the app, not the installer**
+
+NSIS can edit PATH at install time, but the app already knows `process.execPath` and its own
+`root` on every platform — including `dist:dir`, portable and unpacked runs that have no
+installer at all. One code path covers Windows, macOS, Linux and AppImage, and
+`--install-cli` repairs a broken setup without reinstalling.
+
+**Verified** (win32, packaged `dist\win-unpacked\PeerHub.exe`)
+
+- `PeerHub.exe --install-cli` → exit 0, `[cli] ph installed -> …\PeerHub\bin\ph.cmd`, shim
+  pointing at the running executable.
+- Copied `cli/peerhub.mjs` hash equals the source file's.
+- App running on a fresh data dir: `ph ping` → `PeerHub is running · 0 repo(s)`; `ph init` in a
+  new folder created the repo and linked the folder; `ph commit -m "from ph"` recorded the
+  commit with `A /README.md`; `ph log` and `ph repos` listed it. Git Bash resolves the
+  extensionless `ph` shim too.
+- `--uninstall-cli` removes the shims and the PATH entry; `--install-cli` restores both.
+- `--smoke` still exits 0 (`200 title="PeerHub"`, `POST ?/refresh -> 200`).
+- With the app stopped and a stale `.cli-url`, `ph` prints "Cannot reach PeerHub at
+  http://localhost:5173" and deletes the stale file.
+
+**Limits**
+
+- PATH is read when a shell starts: terminals already open (and a Windows Terminal window that
+  predates the install) keep the old PATH until restarted.
+- macOS/Linux write the shim to `~/.peerhub/bin`; macOS does not put that on PATH by default,
+  so the app reports the folder instead of editing shell rc files.
+- The CLI stays a client: with the app not running every command fails with the "start the
+  app" message. It never opens the corestore itself.

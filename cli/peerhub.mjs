@@ -2,6 +2,9 @@
 // PeerHub CLI. Talks to the running app over localhost HTTP; it never opens the
 // corestore itself, so the app stays the only writer.
 //
+// The installed desktop app puts this file behind the `ph` (and `peerhub`)
+// command, so no Node install is needed: `ELECTRON_RUN_AS_NODE=1` runs it.
+//
 //   peerhub status
 //   peerhub commit -m "what changed"
 //   peerhub log [-n 20]
@@ -38,6 +41,7 @@ const USAGE = `peerhub — talk to your running PeerHub from the terminal
   repos                      repositories and their linked folders
   create <name> [--path d]   create a repo and link a folder to it
       [--private]
+  init [name]                create a repo for this folder (name defaults to it)
   rm <path>                  delete a path locally and in the repo
   ping                       is the app running (and does the token work)
 
@@ -395,8 +399,12 @@ switch (cmd) {
 		});
 		break;
 
-	case 'create': {
-		const name = rest[0];
+	case 'create':
+	case 'init': {
+		// `init` is the git-shaped spelling: no arguments, the folder names the
+		// repo. `create` keeps requiring a name, so a typo cannot silently make
+		// a repo called after whatever directory the terminal happened to be in.
+		const name = rest[0] ?? (cmd === 'init' ? path.basename(cwd) : null);
 		if (!name) fail('usage: peerhub create <name> [--path <folder>] [--private]');
 		await send(
 			{

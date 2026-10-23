@@ -35,6 +35,7 @@ That is the whole setup. Pick the target you need:
 | Installable app         | `npm run dist`          | `dist/PeerHub Setup <version>.exe` (NSIS), `.dmg`, `.AppImage` |
 | Unpacked app            | `npm run dist:dir`      | `dist/win-unpacked/PeerHub.exe`                                |
 | Headless boot check     | `npm run desktop:smoke` | prints the served URL + title, exits 0/1                       |
+| Terminal command        | start the app once      | `ph` (and `peerhub`) on PATH, no Node needed                   |
 
 `run.bat` (Windows) / `run.sh` (macOS, Linux) wrap `npm run desktop:dev`, install dependencies
 on first run, and refuse a second instance.
@@ -43,6 +44,25 @@ on first run, and refuse a second instance.
 
 Start the app normally (double-click the installed app, or `npm run desktop`). Then, from any
 folder linked to a repo:
+
+```bash
+ph status                     # what changed vs HEAD
+ph init                       # new repo, named after the folder and linked to it
+ph commit -m "what changed"
+ph log
+```
+
+**Where `ph` comes from.** The desktop app installs it on every launch: it copies the CLI and
+the one module it imports into `%LOCALAPPDATA%\PeerHub\` (macOS/Linux: `~/.peerhub/`), writes
+`ph.cmd` + `ph` shims in `bin/` that point at its own executable, and adds that folder to your
+**user** PATH. No Node install is required — the app's executable doubles as the runtime via
+`ELECTRON_RUN_AS_NODE=1`. `peerhub` is installed alongside `ph`, so both spellings work.
+
+PATH is only read when a shell starts, so open a **new** terminal afterwards. Help → Command
+line tool (ph) shows the shim path and can reinstall it; `PeerHub.exe --install-cli` and
+`--uninstall-cli` do the same without opening a window.
+
+**From source** (before packaging, or when hacking on the CLI):
 
 ```bash
 npm run cli -- status                  # what changed vs HEAD
@@ -81,9 +101,10 @@ to start over as a new peer.
 ### Project layout
 
 ```
-desktop/              Electron main process (window, menu, in-process HTTP server)
+desktop/              Electron main process: window, menu, in-process HTTP server
+                      cli-install.js writes the `ph` shims
 scripts/              build-schema.cjs, dev-desktop.mjs, clean.mjs
-cli/                  the `peerhub` terminal client
+cli/                  the `peerhub` terminal client (installed as `ph` in the app)
 src/                  SvelteKit app
   lib/server/         all peer/storage logic (no UI imports)
   lib/components/     UI components
@@ -187,7 +208,7 @@ The CLI talks to the running app over localhost; it never opens the corestore it
 there is still exactly one writer. Run it from inside a folder linked to a repo.
 
 ```bash
-npm run cli -- status          # or: node cli/peerhub.mjs status, or npm link → peerhub
+ph status          # installed app; from source: node cli/peerhub.mjs status
 ```
 
 | Command                                        | What it does                                                                                              |
@@ -203,6 +224,7 @@ npm run cli -- status          # or: node cli/peerhub.mjs status, or npm link �
 | `peerhub auto on\|off [--commit]`              | Periodic sync; `--commit` records a checkpoint commit and turns the folder two-way                        |
 | `peerhub repos`                                | Repositories, their direction, linked folders and HEAD                                                    |
 | `peerhub create <name> [--path .] [--private]` | New repo + link the folder + first sync                                                                   |
+| `peerhub init [name]`                          | Same, with the repo named after the current folder                                                        |
 | `peerhub rm <path>`                            | Delete a path locally and in the repo                                                                     |
 
 **How it fits together**
@@ -226,14 +248,15 @@ npm run cli -- status          # or: node cli/peerhub.mjs status, or npm link �
 
 ### Terminal troubleshooting
 
-| Symptom                                         | Cause and fix                                                                                                                                                                                                                       |
-| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `File descriptor could not be locked`           | Two app instances are opening the same corestore. In dev mode an HMR reload can spawn a second one while the first still holds the store. Close the terminal and start the app again — only one process may own the data directory. |
-| `Cannot reach PeerHub at http://localhost:5173` | The app is not running, or it is on another port. The desktop app writes its URL to `<data-dir>/.cli-url` and the CLI reads it; in dev, pass `--url http://localhost:<port>` (or set `PEERHUB_URL`).                                |
-| `No CLI token at …/.cli-token`                  | The app has never opened its data directory. Start it once; the token is written on boot. `PEERHUB_TOKEN` overrides the file.                                                                                                       |
-| `PeerHub: Invalid CLI token`                    | The token file changed (fresh data dir) or the command ran against another machine. Re-read `<data-dir>/.cli-token`.                                                                                                                |
-| `No repository is linked to <folder>`           | That folder is not a sync target. Link it in the repo's Settings tab, or run `peerhub create <name> --path .`. The error lists the folders that are linked.                                                                         |
-| History missing after deleting a repo           | Deleting a repo removes its records, not its folder: `sessions/<id>/` stays under the data directory. With the app stopped, delete that folder by hand to reclaim the space.                                                        |
+| Symptom                                         | Cause and fix                                                                                                                                                                                                                        |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `File descriptor could not be locked`           | Two app instances are opening the same corestore. In dev mode an HMR reload can spawn a second one while the first still holds the store. Close the terminal and start the app again — only one process may own the data directory.  |
+| `Cannot reach PeerHub at http://localhost:5173` | The app is not running, or it is on another port. The desktop app writes its URL to `<data-dir>/.cli-url` and the CLI reads it; in dev, pass `--url http://localhost:<port>` (or set `PEERHUB_URL`).                                 |
+| `No CLI token at …/.cli-token`                  | The app has never opened its data directory. Start it once; the token is written on boot. `PEERHUB_TOKEN` overrides the file.                                                                                                        |
+| `PeerHub: Invalid CLI token`                    | The token file changed (fresh data dir) or the command ran against another machine. Re-read `<data-dir>/.cli-token`.                                                                                                                 |
+| `No repository is linked to <folder>`           | That folder is not a sync target. Link it in the repo's Settings tab, or run `peerhub create <name> --path .`. The error lists the folders that are linked.                                                                          |
+| `'ph' is not recognized`                        | The shims are written when the app starts, so launch the app once after installing, and open a new terminal (PATH is read at shell start). Manual fix: add `%LOCALAPPDATA%\PeerHub\bin` to PATH, or run `PeerHub.exe --install-cli`. |
+| History missing after deleting a repo           | Deleting a repo removes its records, not its folder: `sessions/<id>/` stays under the data directory. With the app stopped, delete that folder by hand to reclaim the space.                                                         |
 
 ## How it works
 
@@ -307,6 +330,7 @@ gap list.
 | `src/lib/server/cli-token.ts`        | local token that guards the CLI endpoint                                              |
 | `cli/peerhub.mjs`                    | the `peerhub` binary (npm `bin`)                                                      |
 | `desktop/main.js`                    | Electron: single instance, in-process server, window, menu, `--smoke`                 |
+| `desktop/cli-install.js`             | installs `ph` / `peerhub` shims and adds their folder to the user PATH                |
 | `scripts/dev-desktop.mjs`            | Vite + Electron for development                                                       |
 | `scripts/build-schema.cjs`           | hyperschema definitions → `spec/hyperschema`, `spec/hyperdb`                          |
 | `electron-builder.yml`               | packaging: files, asar, icons, per-OS targets                                         |
@@ -331,6 +355,7 @@ Fields are appended, not reordered: hyperschema identifies them by position.
 | `npm run dist:dir`        | Unpacked app in `dist/`, no installer                                     |
 | `npm run dev`             | Vite dev server only (browser)                                            |
 | `npm run cli -- <cmd>`    | Terminal CLI (also `node cli/peerhub.mjs`, or `peerhub` after `npm link`) |
+| `ph <cmd>`                | What the installed app puts on PATH (same CLI, includes `init`)           |
 | `npm run build`           | Production build (adapter-node → `build/`)                                |
 | `npm run build:schema`    | Regenerate the HyperDB schema                                             |
 | `npm run check`           | `svelte-check` over the project                                           |
