@@ -109,7 +109,10 @@ ns.register({
 		{ name: 'treeDigest', type: 'string', required: true }, // serialized path->{hash,size,mtime}
 		{ name: 'authorKey', type: 'string', required: true },
 		{ name: 'message', type: 'string', required: true },
-		{ name: 'ts', type: 'uint', required: true }
+		{ name: 'ts', type: 'uint', required: true },
+		// Appended: serialized changelist ("A /a\nM /b\nD /c") so history and
+		// restore do not have to re-diff trees. Null on root/legacy commits.
+		{ name: 'changes', type: 'string' }
 	]
 });
 

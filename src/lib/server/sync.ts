@@ -7,6 +7,7 @@ import { randombytes_buf } from 'sodium-native';
 import { writeIntoStream } from './shared-drive.js';
 import { invalidateEntries } from './loaders.js';
 import { loadIgnoreSources } from './ignores.js';
+import { isReservedRepoPath } from './paths.js';
 import { compileIgnore, type IgnoreMatcher, type IgnoreSource } from '$lib/ignore';
 import type DriveSession from './session.js';
 
@@ -27,6 +28,8 @@ export interface SyncPair {
 	id: string;
 	path: string;
 	auto: boolean;
+	/** When true, an automatic pass that moved files also records a commit. */
+	autoCommit: boolean;
 	createdAt: number;
 	lastSyncAt: number | null;
 	lastResult: string | null;
@@ -115,6 +118,7 @@ export default class SessionSync {
 			id: randomId(),
 			path: resolved,
 			auto: false,
+			autoCommit: false,
 			createdAt: Date.now(),
 			lastSyncAt: null,
 			lastResult: null
@@ -141,11 +145,12 @@ export default class SessionSync {
 		} catch {}
 	}
 
-	setAuto(id: string, auto: boolean): void {
+	setAuto(id: string, auto: boolean, autoCommit?: boolean): void {
 		const pair = this.pairs.find((p) => p.id === id);
 		if (!pair) throw new Error('Sync folder not found');
 
 		pair.auto = auto;
+		pair.autoCommit = auto ? (autoCommit ?? pair.autoCommit) : false;
 		this.save();
 
 		const timer = this.timers.get(pair.id);
@@ -196,6 +201,11 @@ export default class SessionSync {
 			const summary = await syncOnce(this.session, pair, this.stateFile(pair.id));
 			pair.lastSyncAt = Date.now();
 			pair.lastResult = formatSummary(summary);
+
+			// `auto --commit`: keep a changelist even when nobody commits by hand,
+			// so every automatic pass can be inspected and restored later.
+			if (pair.autoCommit) await this.checkpoint(summary);
+
 			return summary;
 		} catch (err: any) {
 			pair.lastResult = `error: ${err?.message ?? err}`;
@@ -205,6 +215,23 @@ export default class SessionSync {
 			this.save();
 			// A sync changes both sides; drop cached listings so the next render shows it.
 			invalidateEntries(this.session.id);
+		}
+	}
+
+	private async checkpoint(summary: SyncSummary): Promise<void> {
+		const moved = summary.added + summary.updated + summary.deleted;
+		if (moved === 0) return;
+
+		const { commit } = await import('./git.js');
+		const { selfKeyHex } = await import('./users.js');
+		try {
+			await commit(this.session, {
+				message: `auto: +${summary.added} ~${summary.updated} -${summary.deleted}`,
+				authorKey: selfKeyHex(this.session.app)
+			});
+		} catch (err: any) {
+			// Never fail the sync because a checkpoint could not be written; say so.
+			console.warn(`sync auto-commit failed for ${this.session.id}:`, err?.message ?? err);
 		}
 	}
 
@@ -222,6 +249,7 @@ export default class SessionSync {
 					id: pair.id,
 					path: pair.path,
 					auto: !!pair.auto,
+					autoCommit: !!pair.autoCommit,
 					createdAt: pair.createdAt ?? Date.now(),
 					lastSyncAt: pair.lastSyncAt ?? null,
 					lastResult: pair.lastResult ?? null
@@ -261,11 +289,13 @@ async function syncOnce(
 	// browser upload apply here. Local rules are read too — on the first run the
 	// folder's .gitignore has not been shared yet, and that is exactly when a
 	// linked project would otherwise mirror its node_modules.
-	const ignore = await syncIgnore(session, local);
+	const ignore = await buildIgnore(session, local);
 
 	const localFiles = await localManifest(local);
 	const sharedFiles = new Map<string, SideStat>();
 	for (const file of await drive.manifestShared('/')) {
+		// `/.peerhub` is the repo's own history store, not content to mirror.
+		if (isReservedRepoPath(file.path)) continue;
 		sharedFiles.set(file.path, { size: file.size, mtime: file.mtime });
 	}
 
@@ -380,8 +410,12 @@ async function syncOnce(
 
 // Rules for one sync run: the repo's stored .gitignore files plus the mirrored
 // folder's own — on the first run the folder's files are not shared yet, and
-// that is exactly when their rules matter.
-async function syncIgnore(session: DriveSession, local: Localdrive): Promise<IgnoreMatcher> {
+// that is exactly when their rules matter. Exported so the CLI reports status
+// against the same rules the sync engine would apply.
+export async function buildIgnore(
+	session: DriveSession,
+	local: Localdrive
+): Promise<IgnoreMatcher> {
 	const sources: IgnoreSource[] = [];
 
 	try {
@@ -424,6 +458,7 @@ async function localManifest(local: Localdrive): Promise<Map<string, SideStat>> 
 	for await (const entry of local.list('/')) {
 		if (!entry?.key || entry.value?.linkname) continue;
 		if (isIgnored(entry.key)) continue;
+		if (isReservedRepoPath(entry.key)) continue;
 		out.set(entry.key, {
 			size: entry.value?.blob?.byteLength ?? 0,
 			mtime: typeof entry.mtime === 'number' ? entry.mtime : null

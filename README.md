@@ -64,6 +64,7 @@ to start over as a new peer.
 | **Public repos** | Open a read-only mirror with no invite. Private repos show by name only and need an invite link.                                                                                                |
 | **Uploads**      | Files or whole folders from any peer. Picking a folder uploads its **contents** into the current directory (no wrapper folder), and `.gitignore` is honoured on both ends.                      |
 | **Local sync**   | Link a folder on disk; reconcile on demand or every 15 s, two-way, additions/edits/deletions.                                                                                                   |
+| **Terminal CLI** | Work on a linked folder like a git checkout while the app runs: `status`, `commit`, `log`, `show`, `restore`, `sync`, `auto on/off`.                                                            |
 | **Identity**     | Persistent keypair stored in the data dir; a profile record (handle, display name, bio, avatar) is seeded on first run and replicated to peers.                                                 |
 
 ### .gitignore-aware uploads
@@ -112,6 +113,59 @@ a README is shown as text, never executed. `javascript:` links are dropped, link
 out of the repo root are reduced to their label, and mermaid runs with `securityLevel: 'strict'`
 and no network access. A diagram that fails to parse keeps its source and prints mermaid's
 error above it — it never renders blank.
+
+## Terminal
+
+The CLI talks to the running app over localhost; it never opens the corestore itself, so
+there is still exactly one writer. Run it from inside a folder linked to a repo.
+
+```bash
+npm run cli -- status          # or: node bin/peerhub.mjs status, or npm link → peerhub
+```
+
+| Command                                        | What it does                                                                                    |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `peerhub ping`                                 | Is the app up, and does the token work?                                                         |
+| `peerhub status`                               | Branch, HEAD, and the changelist: untracked / modified / deleted, plus `.gitignore` filtering   |
+| `peerhub commit -m "msg"`                      | Pushes the folder through sync, then records a commit with its changelist and content snapshots |
+| `peerhub log [-n 20]`                          | History, newest first, with `+added ~modified -deleted` per commit                              |
+| `peerhub show <sha>`                           | One commit, its parent and its full changelist (short shas work)                                |
+| `peerhub restore <sha> [paths…]`               | Writes that commit back into the folder; with no paths the folder is made to match that commit  |
+| `peerhub sync`                                 | One manual reconcile                                                                            |
+| `peerhub auto on\|off [--commit]`              | Periodic sync; `--commit` records a checkpoint commit on every pass that moves files            |
+| `peerhub repos`                                | Repositories, their linked folders and HEAD                                                     |
+| `peerhub create <name> [--path .] [--private]` | New repo + link the folder + first sync                                                         |
+| `peerhub rm <path>`                            | Delete a path locally and in the repo                                                           |
+
+**How it fits together**
+
+- The linked folder is the working tree; the repo is the committed side. `status` digests the
+  folder with the same hashing a commit uses, so what it lists is exactly what a commit records.
+- `commit` runs the sync engine first, so local edits, deletions and `.gitignore` rules behave
+  the same as they do from the UI, then writes the commit.
+- Every commit stores a changelist (`A`/`M`/`D` per path) and a copy of each changed file under
+  `/.peerhub/history/<sha>/…` inside the repo's shared drive. Unchanged files are not copied: a
+  restore walks parents until a snapshot matches, so history costs about one copy per changed
+  version and replicates to peers with the files.
+- `restore <sha>` overwrites the folder with that commit. Add `--dry-run` to see the plan;
+  files the repo tracks that the target commit never had are removed, but untracked local files
+  (ignored, new, `.git`) are left alone.
+- `auto on --commit` gives you a changelist even when nobody commits by hand: each pass that
+  moved files becomes a commit named after its counts (`auto: +2 ~1 -1`).
+- Auth: the endpoint requires the token the app writes to `<data-dir>/.cli-token` on boot. A web
+  page cannot read that file, so a stray site cannot drive your repositories. The app must be
+  running: `peerhub` is a client, not a second daemon.
+
+### Terminal troubleshooting
+
+| Symptom                                         | Cause and fix                                                                                                                                                                                                                       |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `File descriptor could not be locked`           | Two app instances are opening the same corestore. In dev mode an HMR reload can spawn a second one while the first still holds the store. Close the terminal and start the app again — only one process may own the data directory. |
+| `Cannot reach PeerHub at http://localhost:5173` | The app is not running, or it is on another port. Start it, or pass `--url http://localhost:<port>` (or set `PEERHUB_URL`).                                                                                                         |
+| `No CLI token at …/.cli-token`                  | The app has never opened its data directory. Start it once; the token is written on boot. `PEERHUB_TOKEN` overrides the file.                                                                                                       |
+| `PeerHub: Invalid CLI token`                    | The token file changed (fresh data dir) or the command ran against another machine. Re-read `<data-dir>/.cli-token`.                                                                                                                |
+| `No repository is linked to <folder>`           | That folder is not a sync target. Link it in the repo's Settings tab, or run `peerhub create <name> --path .`. The error lists the folders that are linked.                                                                         |
+| History missing after deleting a repo           | Deleting a repo removes its records, not its folder: `sessions/<id>/` stays under the data directory. With the app stopped, delete that folder by hand to reclaim the space.                                                        |
 
 ## How it works
 
@@ -168,6 +222,12 @@ gap list.
 | `src/lib/ignore.ts`                  | shared `.gitignore` parser/matcher and upload planner                                 |
 | `src/lib/markdown.ts`                | markdown → HTML (escape-first; mermaid fences kept as placeholders)                   |
 | `src/lib/components/Markdown.svelte` | renders markdown HTML, upgrades mermaid fences to SVG                                 |
+| `src/lib/server/cli.ts`              | terminal operations: status, commit, restore, sync, auto, create, rm                  |
+| `src/lib/server/history.ts`          | commit content snapshots and restoring them into a folder                             |
+| `src/lib/server/paths.ts`            | the reserved `/.peerhub` area that holds history, never repo content                  |
+| `src/lib/server/cli-token.ts`        | local token that guards the CLI endpoint                                              |
+| `bin/peerhub.mjs`                    | the `peerhub` binary (npm `bin`)                                                      |
+| `src/routes/api/cli/+server.ts`      | the endpoint the CLI talks to (token-gated)                                           |
 | `build.cjs`                          | hyperschema definitions → `spec/hyperschema`, `spec/hyperdb`                          |
 | `src/routes/`                        | `/` dashboard, `/explore`, `/drive/[id]` with `code`, `commit`, `settings`, `preview` |
 
@@ -181,16 +241,17 @@ Fields are appended, not reordered: hyperschema identifies them by position.
 
 ## Commands
 
-| Command                                            | What it does                                                 |
-| -------------------------------------------------- | ------------------------------------------------------------ |
-| `npm run dev`                                      | Vite dev server                                              |
-| `npm run build`                                    | Production build                                             |
-| `npm run preview`                                  | Preview the production build                                 |
-| `npm run build:schema`                             | Regenerate the HyperDB schema                                |
-| `npm run check`                                    | `svelte-check` over the project                              |
-| `npm run format` / `npm run lint`                  | Prettier write / check (lint is the CI gate, with the build) |
-| `npm run make:darwin-arm64` / `make:android-arm64` | Native bundles via `bare-build`                              |
-| `npm run clean`                                    | Remove `out`, `build`, `.svelte-kit`                         |
+| Command                                            | What it does                                                              |
+| -------------------------------------------------- | ------------------------------------------------------------------------- |
+| `npm run dev`                                      | Vite dev server                                                           |
+| `npm run cli -- <cmd>`                             | Terminal CLI (also `node bin/peerhub.mjs`, or `peerhub` after `npm link`) |
+| `npm run build`                                    | Production build                                                          |
+| `npm run preview`                                  | Preview the production build                                              |
+| `npm run build:schema`                             | Regenerate the HyperDB schema                                             |
+| `npm run check`                                    | `svelte-check` over the project                                           |
+| `npm run format` / `npm run lint`                  | Prettier write / check (lint is the CI gate, with the build)              |
+| `npm run make:darwin-arm64` / `make:android-arm64` | Native bundles via `bare-build`                                           |
+| `npm run clean`                                    | Remove `out`, `build`, `.svelte-kit`                                      |
 
 ## Tech stack
 
@@ -226,6 +287,8 @@ Honest list, all of it planned work rather than hidden behaviour:
 - **Commit authorship is a raw key.** Profiles exist, but the UI shows the first 8 hex
   characters instead of a handle, and there is no profile editor yet.
 - **The only way to change a `.gitignore` is to upload it again.** No in-app file editor.
+- **The CLI works on `main` only.** Branch creation and switching are UI-only for now, and
+  there is no staging area/index: `commit` takes everything the folder changed.
 - **Markdown is a deliberate subset.** No raw HTML blocks, footnotes, reference-style links or
   syntax highlighting. Mermaid is the one rich feature, and it ships as a lazy-loaded chunk.
 - **Android launcher icons are stale** (`resources/android/mipmap-*`); the web and desktop

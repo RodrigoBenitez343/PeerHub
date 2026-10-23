@@ -4,6 +4,9 @@
 	"version": "0.1.0",
 	"private": true,
 	"type": "module",
+	"bin": {
+		"peerhub": "bin/peerhub.mjs"
+	},
 	"description": "Peer-to-peer code hosting: repositories, history, branches and forks with no server",
 	"imports": {
 		"#read-asset": {
@@ -33,6 +36,7 @@
 	},
 	"scripts": {
 		"dev": "vite dev",
+		"cli": "node bin/peerhub.mjs",
 		"build": "vite build",
 		"build:schema": "node build.cjs",
 		"preview": "vite preview",

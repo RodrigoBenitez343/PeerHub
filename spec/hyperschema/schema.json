@@ -1,5 +1,5 @@
 {
-	"version": 7,
+	"version": 8,
 	"schema": [
 		{
 			"name": "session",
@@ -325,6 +325,11 @@
 					"required": true,
 					"type": "uint",
 					"version": 4
+				},
+				{
+					"name": "changes",
+					"type": "string",
+					"version": 8
 				}
 			]
 		},

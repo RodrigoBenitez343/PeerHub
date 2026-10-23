@@ -477,8 +477,8 @@ export default class DriveSession extends ReadyResource {
 		await this.requireSync().remove(id);
 	}
 
-	async setSyncAuto(id: string, auto: boolean): Promise<void> {
-		await this.requireSync().setAuto(id, auto);
+	async setSyncAuto(id: string, auto: boolean, autoCommit?: boolean): Promise<void> {
+		await this.requireSync().setAuto(id, auto, autoCommit);
 	}
 
 	async runSync(id: string): Promise<SyncSummary> {

@@ -6,6 +6,7 @@ import { getRepoMeta } from '$lib/server/repos';
 import type { SharedFile } from '$lib/server/shared-drive';
 import { renderMarkdown } from '$lib/markdown';
 import { loadReadme, markdownOptions } from '$lib/server/readme';
+import { isReservedRepoPath } from '$lib/server/paths';
 import {
 	DEFAULT_BRANCH,
 	createBranch,
@@ -39,6 +40,8 @@ function listDir(all: SharedFile[], dir: string) {
 
 	for (const entry of all) {
 		if (!entry.path.startsWith(prefix)) continue;
+		// The repo's own history store lives here; it is not repo content.
+		if (isReservedRepoPath(entry.path)) continue;
 		const rest = entry.path.slice(prefix.length);
 		if (!rest) continue;
 		const slash = rest.indexOf('/');
@@ -126,7 +129,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		dir,
 		folders: listing.folders,
 		files: listing.files,
-		totalFiles: files.length,
+		totalFiles: files.filter((entry) => !isReservedRepoPath(entry.path)).length,
 		filesError,
 		selected: selected ?? null,
 		file,

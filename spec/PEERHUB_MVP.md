@@ -718,3 +718,73 @@ branch page shows the same history → delete branch 303.
 - The README is re-read on every page load; there is no cache or ETag for it yet.
 - Relative links inside a _previewed_ file (not README) resolve the same way, but a link to a
   directory opens the Files grid, not the Code tree.
+
+---
+
+## 15. Terminal CLI + commit history (implemented)
+
+**Shape**
+
+- `bin/peerhub.mjs` is a client. It POSTs a command to `/api/cli` on the running app and prints
+  the result. It never opens the corestore, so the single-writer rule and every cache stay
+  intact; the app must be running.
+- Auth: `x-peerhub-token` must equal `<data-dir>/.cli-token`, written by `cli-token.ts` on boot
+  (0600). A browser cannot read that file, so a stray page cannot drive repositories. This is
+  CSRF-shaped protection, not a defence against a local attacker who already owns the store.
+- `src/lib/server/cli.ts` holds the operations; the route is a thin switch. Repo lookup is by
+  folder: the longest sync-pair path containing `cwd` wins, and the error lists linked folders.
+
+**Status**
+
+- Digests the linked folder with the same function `buildTree` uses (`digestBytes` /
+  `digestStat`, 4 MB cap), applies the sync engine's ignore matcher (shared + local
+  `.gitignore`), skips `/.peerhub`, then diffs against HEAD's tree digest. Untracked /
+  modified / deleted fall out of that diff with no index to maintain.
+
+**Commits and history**
+
+- `@ghostdrive/commit` gained `changes` (appended; schema v8): `"A /a\nM /b\nD /c"`. Legacy
+  commits without it are diffed from their parent on demand (`history.ts changesOf`).
+- Every commit copies the content of each added/modified path to
+  `/.peerhub/history/<sha>/<path>` in the repo's **shared drive** — so history replicates with
+  the files and needs no extra key. Unchanged files are not copied; `resolveSnapshot` walks
+  parents until a snapshot matches, and a `D` entry stops the walk so deletions are not
+  resurrected.
+- `restore <sha>` with no paths is exact-tree: it restores every path in that commit's tree and
+  deletes local copies of paths the repo still tracks that the commit never had. Untracked
+  local files are untouched. `--dry-run` prints the same plan without writing.
+- `auto on --commit`: `SyncPair.autoCommit` (a local JSON field, no schema) makes any pass that
+  moved files record a commit `auto: +a ~u -d`, so a periodic workflow still leaves a
+  changelist to inspect and restore from.
+
+**Reserved area**
+
+- `/.peerhub` is hidden from the files grid (dot-prefixed), the code tree, `buildTree`, and both
+  sides of the sync engine (`paths.ts::isReservedRepoPath`). It is not content and never gets
+  mirrored into a linked folder.
+
+**Verified** (35 checks, scripted against a live app + a scratch folder)
+
+- Create+link+sync, status before/after first commit, untracked/modified/deleted classification,
+  `.gitignore` filtering in status.
+- Two commits with exact changelists; `log` ordering; `show` by short sha; history hidden from
+  the code page.
+- Restore: dry run writes nothing; exact-tree restore brings back a deleted file, removes a
+  file added later, leaves an untracked file alone; single-path restore only touches that path.
+- `auto on --commit` + a manual sync produced an `auto: +2 ~1 -1` checkpoint; `auto off`.
+- `rm` removes locally and in the repo; unauthenticated request returns 401.
+- The binary itself: `ping`, `status`, `log`, and a `commit -m` from the terminal leave the
+  folder clean.
+
+**Gaps**
+
+- `main` only: no branch argument and no staging area/index — a commit takes the whole folder.
+- Snapshots live in the shared drive, so history counts against repo size and is replicated to
+  every peer. Fine for text, wasteful for large binaries; a content-addressed blob store with
+  dedupe is the next step.
+- `restore` rewrites the folder but does not commit; the restore shows up as a pending change
+  until you commit it.
+- No `diff` output (only the changelist); no reflog, no revert-by-patch.
+- Two processes cannot run the app at once (the corestore lock is the guard), and in dev mode an
+  HMR reload can briefly create a second instance — restart `npm run dev` if you see
+  "File descriptor could not be locked".

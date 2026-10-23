@@ -1,0 +1,351 @@
+#!/usr/bin/env node
+// PeerHub CLI. Talks to the running app over localhost HTTP; it never opens the
+// corestore itself, so the app stays the only writer.
+//
+//   peerhub status
+//   peerhub commit -m "what changed"
+//   peerhub log [-n 20]
+//   peerhub show <sha>
+//   peerhub restore <sha> [paths...] [--dry-run]
+//   peerhub sync
+//   peerhub auto on|off [--commit]
+//   peerhub repos
+//   peerhub create <name> [--path .] [--private]
+//   peerhub rm <path>
+//   peerhub ping
+//
+// Run it from inside a folder linked to a repo (the app's Settings tab links
+// folders, `peerhub create` links one for you).
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import process from 'node:process';
+
+const USAGE = `peerhub — talk to your running PeerHub from the terminal
+
+  status                     tracked / modified / untracked files
+  commit -m <msg>            push local changes to the repo and record a commit
+  log [-n <count>]           commit history with changelists
+  show <sha>                 one commit and what it changed
+  restore <sha> [paths...]   write that commit's files back locally
+      --dry-run              report what would change, write nothing
+  sync                       reconcile the linked folder with the repo now
+  auto on|off [--commit]     periodic sync; --commit keeps a changelist per pass
+  repos                      repositories and their linked folders
+  create <name> [--path d]   create a repo and link a folder to it
+      [--private]
+  rm <path>                  delete a path locally and in the repo
+  ping                       is the app running (and does the token work)
+
+Global flags: --json (raw output), --url <url> (default http://localhost:5173)`;
+
+function dataDir() {
+	const home = os.homedir();
+	if (process.platform === 'win32') return path.join(process.env.APPDATA ?? home, 'ghost-drive');
+	if (process.platform === 'darwin')
+		return path.join(home, 'Library', 'Application Support', 'ghost-drive');
+	return path.join(process.env.XDG_DATA_HOME ?? path.join(home, '.local', 'share'), 'ghost-drive');
+}
+
+function token() {
+	const fromEnv = process.env.PEERHUB_TOKEN;
+	if (fromEnv) return fromEnv;
+	const file = path.join(dataDir(), '.cli-token');
+	try {
+		return fs.readFileSync(file, 'utf8').trim();
+	} catch {
+		fail(
+			`No CLI token at ${file}.\n` +
+				'Start the app once (run.bat / run.sh / npm run dev); it writes the token on boot.'
+		);
+	}
+}
+
+function fail(message) {
+	console.error(message);
+	process.exit(1);
+}
+
+function parseArgs(argv) {
+	const flags = { json: false, dryRun: false, private: false, commit: false, limit: null };
+	const positional = [];
+	let url = process.env.PEERHUB_URL ?? 'http://localhost:5173';
+
+	for (let i = 0; i < argv.length; i++) {
+		const arg = argv[i];
+		if (arg === '--json') flags.json = true;
+		else if (arg === '--dry-run') flags.dryRun = true;
+		else if (arg === '--private') flags.private = true;
+		else if (arg === '--commit') flags.commit = true;
+		else if (arg === '--url') url = argv[++i];
+		else if (arg === '-m' || arg === '--message') flags.message = argv[++i];
+		else if (arg === '-n') flags.limit = Number(argv[++i]);
+		else if (arg === '--path') flags.path = argv[++i];
+		else if (arg === '-h' || arg === '--help') flags.help = true;
+		else positional.push(arg);
+	}
+
+	return { flags, positional, url };
+}
+
+async function call(url, method, payload) {
+	const headers = { 'x-peerhub-token': token() };
+	let body;
+	if (payload) {
+		headers['content-type'] = 'application/json';
+		body = JSON.stringify(payload);
+	}
+
+	let res;
+	try {
+		res = await fetch(url + '/api/cli', { method, headers, body });
+	} catch (err) {
+		fail(
+			`Cannot reach PeerHub at ${url} (${err?.message ?? err}).\n` +
+				'Is the app running? Start it with run.bat / run.sh / npm run dev.'
+		);
+	}
+
+	const text = await res.text();
+	let json = null;
+	try {
+		json = JSON.parse(text);
+	} catch {
+		/* not json */
+	}
+
+	if (!res.ok) {
+		const reason = json?.error?.message ?? json?.error ?? text.slice(0, 200);
+		fail(`PeerHub: ${typeof reason === 'string' ? reason : JSON.stringify(reason)}`);
+	}
+
+	if (json?.ok === false) fail(`PeerHub: ${json.error}`);
+	return json;
+}
+
+// --- human output ---
+
+const STATUS_MARK = { added: 'UNTracked', modified: 'modified ', removed: 'deleted  ' };
+
+function when(ts) {
+	const date = new Date(ts);
+	return date.toISOString().replace('T', ' ').slice(0, 16);
+}
+
+function printStatus(result, cwd) {
+	const lines = [];
+	lines.push(`Repository  ${result.repo.name}  (${result.repo.id})`);
+	lines.push(`Folder      ${result.repo.path}`);
+	lines.push(`Branch      ${result.repo.branch}`);
+	lines.push(
+		result.head
+			? `HEAD        ${result.head.short}  ${result.head.message}  (${when(result.head.ts)})`
+			: 'HEAD        no commits yet'
+	);
+	lines.push('');
+
+	if (result.clean) {
+		lines.push('Nothing to commit — the folder matches HEAD.');
+	} else {
+		const group = (label, status) => {
+			const rows = result.changes.filter((change) => change.status === status);
+			if (rows.length === 0) return;
+			lines.push(`${label} (${rows.length})`);
+			for (const row of rows) lines.push(`  ${STATUS_MARK[status]}  ${row.path}`);
+			lines.push('');
+		};
+		group('Untracked — not in the repo yet', 'added');
+		group('Modified — tracked, changed on disk', 'modified');
+		group('Deleted — tracked, gone from disk', 'removed');
+		lines.push('Commit with: peerhub commit -m "..."');
+	}
+
+	if (result.repo.path !== cwd && !cwd.startsWith(result.repo.path)) {
+		lines.push('');
+		lines.push(`note: run from ${result.repo.path} to keep paths relative to the folder`);
+	}
+	console.log(lines.join('\n'));
+}
+
+function printLog(entries) {
+	if (entries.length === 0) return console.log('No commits yet.');
+	for (const entry of entries) {
+		const counts = entry.changes.reduce((acc, change) => {
+			acc[change.status[0]] = (acc[change.status[0]] ?? 0) + 1;
+			return acc;
+		}, {});
+		const summary = `+${counts.a ?? 0} ~${counts.m ?? 0} -${counts.r ?? 0}`;
+		console.log(`${entry.short}  ${when(entry.ts)}  ${summary.padEnd(12)}  ${entry.message}`);
+	}
+}
+
+function printShow(entry) {
+	console.log(`commit ${entry.sha}${entry.parent ? ` (parent ${entry.parent})` : ' (root)'}`);
+	console.log(`author ${entry.author}`);
+	console.log(`date   ${when(entry.ts)}`);
+	console.log('');
+	console.log(`    ${entry.message}`);
+	console.log('');
+	if (entry.changes.length === 0) {
+		console.log('(no file changes recorded)');
+		return;
+	}
+	console.log(`${entry.changes.length} file(s) changed`);
+	for (const change of entry.changes) {
+		const code = change.status === 'added' ? 'A' : change.status === 'modified' ? 'M' : 'D';
+		console.log(`  ${code}  ${change.path}`);
+	}
+}
+
+function printRestore(result) {
+	console.log(`${result.dryRun ? 'Would restore' : 'Restoring'} ${result.short}:`);
+	for (const action of result.actions) {
+		const label =
+			action.action === 'restored'
+				? 'restored'
+				: action.action === 'deleted'
+					? 'deleted '
+					: 'skipped ';
+		console.log(`  ${label}  ${action.path}${action.reason ? `  (${action.reason})` : ''}`);
+	}
+	if (!result.dryRun) {
+		console.log('');
+		console.log(
+			'Files written. Run `peerhub status` to see the diff, then commit if you want it in the repo.'
+		);
+	}
+}
+
+function printSummary(summary) {
+	console.log(
+		`sync: +${summary.added} ~${summary.updated} -${summary.deleted}` +
+			(summary.conflicts ? ` conflicts:${summary.conflicts}` : '')
+	);
+	for (const error of summary.errors ?? []) console.log(`  error: ${error}`);
+}
+
+// --- main ---
+
+const { flags, positional, url } = parseArgs(process.argv.slice(2));
+const [cmd, ...rest] = positional;
+const cwd = process.cwd();
+
+if (flags.help || !cmd || cmd === 'help') {
+	console.log(USAGE);
+	process.exit(cmd || flags.help ? 0 : 1);
+}
+
+const send = async (payload, print) => {
+	const response = await call(url, 'POST', { cwd, ...payload });
+	if (flags.json) {
+		console.log(JSON.stringify(response.result, null, 2));
+		return;
+	}
+	print(response.result);
+};
+
+switch (cmd) {
+	case 'ping': {
+		const response = await call(url, 'GET');
+		console.log(
+			flags.json
+				? JSON.stringify(response, null, 2)
+				: `PeerHub is running · ${response.repos} repo(s) · key ${String(response.key).slice(0, 12)}…`
+		);
+		break;
+	}
+
+	case 'status':
+		await send({ cmd: 'status' }, (result) => printStatus(result, cwd));
+		break;
+
+	case 'commit': {
+		const message = flags.message ?? rest.join(' ');
+		await send({ cmd: 'commit', message }, (result) => {
+			if (result.sync) printSummary(result.sync);
+			console.log(`[${result.short}] ${result.message}`);
+			for (const change of result.changes) {
+				const code = change.status === 'added' ? 'A' : change.status === 'modified' ? 'M' : 'D';
+				console.log(`  ${code}  ${change.path}`);
+			}
+		});
+		break;
+	}
+
+	case 'log':
+		await send({ cmd: 'log', limit: flags.limit ?? 20 }, printLog);
+		break;
+
+	case 'show':
+		if (!rest[0]) fail('usage: peerhub show <sha>');
+		await send({ cmd: 'show', sha: rest[0] }, printShow);
+		break;
+
+	case 'restore': {
+		const [sha, ...paths] = rest;
+		if (!sha) fail('usage: peerhub restore <sha> [paths...] [--dry-run]');
+		await send({ cmd: 'restore', sha, paths, dryRun: flags.dryRun }, printRestore);
+		break;
+	}
+
+	case 'sync':
+		await send({ cmd: 'sync' }, printSummary);
+		break;
+
+	case 'auto': {
+		const mode = rest[0] === 'off' ? 'off' : 'on';
+		await send({ cmd: 'auto', mode, commit: flags.commit }, (result) => {
+			console.log(
+				result.auto
+					? `auto sync ON for ${result.pair}` +
+							(result.autoCommit ? ' — every pass that moves files records a commit' : '')
+					: 'auto sync OFF'
+			);
+		});
+		break;
+	}
+
+	case 'repos':
+		await send({ cmd: 'repos' }, (repos) => {
+			if (repos.length === 0) return console.log('No repositories yet.');
+			for (const repo of repos) {
+				const head = repo.head ?? 'no commits';
+				const where = repo.pairs.length ? repo.pairs.join(', ') : '(not linked to a folder)';
+				console.log(`${repo.name}  [${repo.visibility}]  ${head}  peers:${repo.peers}`);
+				console.log(`  ${repo.id}`);
+				console.log(`  ${where}`);
+			}
+		});
+		break;
+
+	case 'create': {
+		const name = rest[0];
+		if (!name) fail('usage: peerhub create <name> [--path <folder>] [--private]');
+		await send(
+			{
+				cmd: 'create',
+				name,
+				dir: flags.path ? path.resolve(flags.path) : cwd,
+				visibility: flags.private ? 'private' : 'public'
+			},
+			(result) => {
+				console.log(`Created ${result.name} (${result.id})`);
+				console.log(`Linked   ${result.path}`);
+				console.log(`Synced   ${result.files} file(s)`);
+				console.log('Next: peerhub commit -m "initial commit"');
+			}
+		);
+		break;
+	}
+
+	case 'rm':
+		if (!rest[0]) fail('usage: peerhub rm <path>');
+		await send({ cmd: 'rm', paths: [rest[0]] }, (result) => {
+			console.log(result.removed ? `removed ${result.path}` : `${result.path} was not present`);
+		});
+		break;
+
+	default:
+		fail(`Unknown command: ${cmd}\n\n${USAGE}`);
+}

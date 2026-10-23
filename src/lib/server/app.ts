@@ -10,6 +10,7 @@ import path from 'path';
 import DriveSession from './session.js';
 import def from '../../../spec/hyperdb/index.js';
 import { ensureDefaultProfile } from './users.js';
+import { ensureCliToken } from './cli-token.js';
 import { registerRepo } from './repos.js';
 import { attachDirectory, broadcastAnnouncements } from './directory.js';
 
@@ -40,6 +41,8 @@ export default class PeerHubApp extends ReadyResource {
 	bee: Hyperbee | null;
 	key: Buffer | null;
 	sessions: Map<string, DriveSession>;
+	/** Shared secret the local CLI must present; see ensureCliToken(). */
+	cliToken: string | null;
 
 	constructor({ dir = '', bootstrap = null }: PeerHubAppOptions = {}) {
 		super();
@@ -51,6 +54,7 @@ export default class PeerHubApp extends ReadyResource {
 		this.bee = null;
 		this.key = null;
 		this.sessions = new Map();
+		this.cliToken = null;
 	}
 
 	protected async _open(): Promise<void> {
@@ -94,6 +98,9 @@ export default class PeerHubApp extends ReadyResource {
 
 		await ensureDefaultProfile(this);
 		log('default profile ensured');
+
+		this.cliToken = ensureCliToken(this.dir);
+		log('cli token ready');
 
 		const sessions = (await this.db!.find('@ghostdrive/sessions', {
 			gte: {},

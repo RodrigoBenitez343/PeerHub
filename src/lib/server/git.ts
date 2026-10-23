@@ -2,15 +2,15 @@ import b4a from 'b4a';
 import { crypto_generichash } from 'sodium-native';
 import type DriveSession from './session.js';
 import { emitActivity } from './events.js';
+import { isReservedRepoPath } from './paths.js';
 
 // A minimal commit DAG on top of the repo's shared file system.
 //
 // Hyperdrive/hyperbee store the *current* tree, not history, so a commit here is
-// a signed record of what the tree looked like: one digest per path, plus the
-// parent commit and message. Branch/tag refs are pointers into that DAG, which
-// is enough for browse, diff, history and merge-gating. Blob history (checking a
-// file out at an old commit) needs content-addressed snapshots and is not part
-// of this layer — see spec/PEERHUB_MVP.md "known gaps".
+// a record of what the tree looked like: one digest per path, plus the parent
+// commit, message and an explicit changelist. Content snapshots for the changed
+// paths are written under `/.peerhub/history/<sha>/…` (see history.ts), which is
+// what makes `restore` possible — a digest alone cannot reconstruct a file.
 
 export const DEFAULT_BRANCH = 'main';
 
@@ -23,6 +23,18 @@ const COMMITS = '@ghostdrive/commits';
 // would block the commit. Same-size-same-mtime edits of such a file can be
 // missed, which is why the tree entry records which mode was used.
 const HASH_CAP = 4 * 1024 * 1024;
+
+/** Digest of a file's bytes, same function the tree uses (exported for the CLI). */
+export function digestBytes(input: Buffer): string {
+	return hashHex(input);
+}
+
+/** Digest stand-in for files too large to hash, so CLI and tree agree. */
+export function digestStat(size: number, mtime: number | null): string {
+	return sizeDigest(size, mtime);
+}
+
+export const DIGEST_SIZE_CAP = HASH_CAP;
 
 export const DEFAULT_TREE_PREFIX = '/';
 
@@ -41,6 +53,7 @@ export interface Commit {
 	authorKey: string;
 	message: string;
 	ts: number;
+	changes: string | null;
 }
 
 export interface Ref {
@@ -90,6 +103,8 @@ export async function buildTree(
 	const files = await session.drive!.manifestShared(prefix);
 	const tree: TreeEntry[] = [];
 	for (const file of files) {
+		// `/.peerhub` holds snapshots and other bookkeeping, never repo content.
+		if (isReservedRepoPath(file.path)) continue;
 		tree.push({
 			path: file.path,
 			size: file.size,
@@ -133,6 +148,36 @@ export function diffTrees(baseDigest: string | null, headDigest: string | null):
 	}
 
 	return changes.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
+// Changelists are stored on the commit as one line per path: "A /a", "M /b",
+// "D /c". Compact, readable in a CLI, and stable to parse.
+const STATUS_CODE: Record<TreeChange['status'], string> = {
+	added: 'A',
+	modified: 'M',
+	removed: 'D'
+};
+const CODE_STATUS: Record<string, TreeChange['status']> = {
+	A: 'added',
+	M: 'modified',
+	D: 'removed'
+};
+
+export function formatChanges(changes: TreeChange[]): string {
+	return changes.map((change) => `${STATUS_CODE[change.status]} ${change.path}`).join('\n');
+}
+
+export function parseChanges(serialized: string | null): TreeChange[] {
+	if (!serialized) return [];
+	const changes: TreeChange[] = [];
+	for (const line of serialized.split('\n')) {
+		const code = line.slice(0, 1);
+		const path = line.slice(2).trim();
+		const status = CODE_STATUS[code];
+		if (!path || !status) continue;
+		changes.push({ path, status });
+	}
+	return changes;
 }
 
 // --- refs ---
@@ -208,10 +253,12 @@ export async function commit(
 
 	const branch = options.branch || DEFAULT_BRANCH;
 	const parentRef = await getRef(session, branch);
+	const parentCommit = parentRef ? await getCommit(session, parentRef.sha) : null;
 	const tree = await buildTree(session);
 	const treeDigest = serializeTree(tree);
+	const changes = diffTrees(parentCommit?.treeDigest ?? null, treeDigest);
 	const ts = Date.now();
-	const parent = parentRef?.sha ?? null;
+	const parent = parentCommit?.sha ?? null;
 
 	const sha = hashHex(
 		JSON.stringify({
@@ -224,6 +271,11 @@ export async function commit(
 		})
 	);
 
+	// Snapshot the content before the commit becomes visible, so a reader never
+	// sees a commit whose files it cannot restore.
+	const { writeSnapshots } = await import('./history.js');
+	await writeSnapshots(session, sha, changes);
+
 	const record: Commit = {
 		repoId: session.id,
 		sha,
@@ -231,7 +283,8 @@ export async function commit(
 		treeDigest,
 		authorKey: options.authorKey,
 		message,
-		ts
+		ts,
+		changes: changes.length > 0 ? formatChanges(changes) : null
 	};
 
 	await session.putMeta(COMMITS, record);
