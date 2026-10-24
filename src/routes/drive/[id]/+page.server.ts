@@ -23,7 +23,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		drive: loadDrive(locals.app, params.id),
 		repo: {
 			visibility: repo?.visibility ?? 'public',
-			forkedFrom: repo?.forkedFrom ?? null
+			forkedFrom: repo?.forkedFrom ?? null,
+			sourceRemoved: !!session?.sourceRemoved
 		},
 		ignore,
 		readme,

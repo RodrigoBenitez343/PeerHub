@@ -1,6 +1,7 @@
 import Localdrive from 'localdrive';
 import type DriveSession from './session.js';
 import { writeIntoStream } from './shared-drive.js';
+import { DELTA_THRESHOLD, readVersion, writeDelta } from './chunks.js';
 import { HISTORY_PREFIX } from './paths.js';
 import {
 	diffTrees,
@@ -20,6 +21,10 @@ import { isReservedRepoPath } from './paths.js';
 // walks the commit chain upwards until a snapshot for that path appears, which
 // keeps storage close to "one copy per changed version".
 //
+// "One copy" stays honest for large files: above DELTA_THRESHOLD the record is a
+// manifest of content-addressed chunks (see chunks.ts), so a commit stores only
+// the sections that changed instead of the whole file again.
+//
 // Deletions need no snapshot — the commit's changelist records them, and the
 // walk stops there so a restore never resurrects a file through the parent.
 
@@ -34,7 +39,13 @@ export async function writeSnapshots(
 		const target = `${HISTORY_PREFIX}/${sha}${change.path}`;
 		try {
 			// Copy through the drive so a guest forwards it like any other write.
-			await session.putFile(target, session.drive!.readShared(change.path));
+			const stat = await session.drive!.statShared(change.path).catch(() => null);
+			if (stat?.exists && stat.size > DELTA_THRESHOLD) {
+				// Large file: store the changed chunks only, not another full copy.
+				await writeDelta(session, target, session.drive!.readShared(change.path));
+			} else {
+				await session.putFile(target, session.drive!.readShared(change.path));
+			}
 			written++;
 		} catch (err: any) {
 			throw new Error(`Could not snapshot ${change.path}: ${err?.message ?? err}`);
@@ -145,7 +156,8 @@ export async function restoreCommit(
 
 			if (hit.state === 'present' && hit.path) {
 				if (!options.dryRun) {
-					await writeIntoStream(local.createWriteStream(path), session.drive!.readShared(hit.path));
+					// readVersion reassembles a chunked record and streams a plain one through.
+					await writeIntoStream(local.createWriteStream(path), readVersion(session, hit.path));
 				}
 				actions.push({ path, action: 'restored' });
 				continue;

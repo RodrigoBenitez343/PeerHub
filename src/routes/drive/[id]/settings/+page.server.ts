@@ -2,6 +2,7 @@ import type { Actions, PageServerLoad } from './$types';
 import { error, fail } from '@sveltejs/kit';
 import { getSession, loadPeers } from '$lib/server/loaders';
 import { formatSummary } from '$lib/server/sync';
+import { isEnhancedRequest, type JobHandle } from '$lib/server/jobs';
 import { pickerAvailable, pickDirectory } from 'ghost-picker';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -220,6 +221,21 @@ export const actions: Actions = {
 		const form = await request.formData();
 		const id = (form.get('syncId') ?? '').toString();
 		if (!id) return fail(400, { error: 'Missing sync folder' });
+
+		if (isEnhancedRequest(request)) {
+			// A reconcile can move thousands of files; it runs detached and the
+			// button polls instead of holding the form submission open.
+			const job = locals.app.jobs.start(
+				{ kind: 'sync', label: 'Syncing folder', repoId: params.id },
+				async (handle: JobHandle) => {
+					const summary = await session.runSync(id, {
+						onProgress: (ev: { done: number }) => handle.progress(ev.done)
+					});
+					return { summary, message: `Sync done — ${formatSummary(summary)}` };
+				}
+			);
+			return { jobId: job.id };
+		}
 
 		try {
 			const summary = await session.runSync(id);

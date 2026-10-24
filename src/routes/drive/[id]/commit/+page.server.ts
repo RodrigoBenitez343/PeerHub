@@ -3,6 +3,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import { getSession } from '$lib/server/loaders';
 import { getRepoMeta } from '$lib/server/repos';
 import { selfKeyHex } from '$lib/server/users';
+import { isEnhancedRequest, type JobHandle } from '$lib/server/jobs';
 import {
 	DEFAULT_BRANCH,
 	commit,
@@ -54,7 +55,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		repo: {
 			visibility: repo?.visibility ?? 'public',
 			defaultBranch: repo?.defaultBranch ?? DEFAULT_BRANCH,
-			forkedFrom: repo?.forkedFrom ?? null
+			forkedFrom: repo?.forkedFrom ?? null,
+			sourceRemoved: !!session.sourceRemoved
 		},
 		branch,
 		branches: refs.map((entry) => ({ name: entry.name, sha: shortSha(entry.sha) })),
@@ -80,6 +82,24 @@ export const actions: Actions = {
 		const form = await request.formData();
 		const message = (form.get('message') ?? '').toString();
 		const branch = (form.get('branch') ?? '').toString() || DEFAULT_BRANCH;
+
+		if (isEnhancedRequest(request)) {
+			// Snapshotting a large tree can take a while; return a job and let the
+			// button keep its pending animation until the redirect target is known.
+			const job = locals.app.jobs.start(
+				{ kind: 'commit', label: `Committing to ${branch}`, repoId: params.id },
+				async (handle: JobHandle) => {
+					const record = await commit(session, {
+						message,
+						branch,
+						authorKey: selfKeyHex(locals.app)
+					});
+					handle.progress(1, 1);
+					return { sha: record.sha, short: shortSha(record.sha), branch };
+				}
+			);
+			return { jobId: job.id };
+		}
 
 		let record;
 		try {

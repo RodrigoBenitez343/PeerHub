@@ -2,8 +2,10 @@
 	import type { PageData, ActionData } from './$types';
 	import type { SubmitFunction } from '@sveltejs/kit';
 	import { enhance } from '$app/forms';
-	import { goto } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
 	import Modal from '$lib/components/Modal.svelte';
+	import Spinner from '$lib/components/Spinner.svelte';
+	import { watchJob } from '$lib/jobs';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
@@ -12,6 +14,7 @@
 	let deleteForm: HTMLFormElement | undefined = $state();
 	let picking = $state(false);
 	let syncingId = $state<string | null>(null);
+	let syncNote = $state<{ ok: boolean; text: string } | null>(null);
 
 	// Action results differ per form, so read them loosely.
 	const actionError = $derived((form as any)?.error as string | undefined);
@@ -26,15 +29,32 @@
 	}
 
 	function onSync(id: string): SubmitFunction {
-		return () =>
-			async ({ update }: { update: () => Promise<void> }) => {
-				syncingId = id;
+		return () => {
+			// Pending at submit time, not when the response arrives — otherwise the
+			// button spends the whole request looking idle.
+			syncingId = id;
+			syncNote = null;
+			return async ({ result, update }: { result: any; update: () => Promise<void> }) => {
 				try {
-					await update();
+					if (result.type === 'failure') {
+						await update();
+						return;
+					}
+					const jobId = result.data?.jobId;
+					if (!jobId) {
+						await update();
+						return;
+					}
+					const job = await watchJob(jobId);
+					syncNote = { ok: true, text: job.result?.message ?? 'Sync done' };
+					await invalidateAll();
+				} catch (err: any) {
+					syncNote = { ok: false, text: `Sync failed: ${err?.message ?? err}` };
 				} finally {
 					syncingId = null;
 				}
 			};
+		};
 	}
 
 	function copy() {
@@ -274,6 +294,16 @@
 				<p class="text-success mb-2 font-mono text-[10px]">{actionMessage}</p>
 			{/if}
 
+			{#if syncNote}
+				<p
+					class="mb-2 font-mono text-[10px]"
+					class:text-success={syncNote.ok}
+					class:text-danger={!syncNote.ok}
+				>
+					{syncNote.text}
+				</p>
+			{/if}
+
 			{#if !data.connected}
 				<p
 					class="border-border bg-bg-secondary text-text-muted rounded-md border px-3 py-4 text-center font-mono text-[10px] tracking-wider uppercase"
@@ -338,9 +368,14 @@
 									<button
 										type="submit"
 										disabled={syncingId === pair.id || pair.running}
-										class="bg-accent text-bg-primary rounded px-3 py-1.5 font-mono text-[9px] tracking-wider uppercase transition hover:brightness-110 disabled:opacity-50"
+										class="bg-accent text-bg-primary flex items-center gap-1.5 rounded px-3 py-1.5 font-mono text-[9px] tracking-wider uppercase transition hover:brightness-110 disabled:opacity-50"
 									>
-										{syncingId === pair.id ? 'Syncing…' : 'Sync now'}
+										{#if syncingId === pair.id || pair.running}
+											<Spinner size={11} />
+											Syncing…
+										{:else}
+											Sync now
+										{/if}
 									</button>
 								</form>
 

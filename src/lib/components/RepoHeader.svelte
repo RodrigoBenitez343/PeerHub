@@ -11,6 +11,7 @@
 		active = 'files',
 		isGuest = false,
 		canWrite = true,
+		sourceRemoved = false,
 		forkedFrom = null
 	}: {
 		id: string;
@@ -19,6 +20,8 @@
 		active?: RepoTab;
 		isGuest?: boolean;
 		canWrite?: boolean;
+		/** The owner stopped announcing this repo: the mirror is stale. */
+		sourceRemoved?: boolean;
 		forkedFrom?: string | null;
 	} = $props();
 
@@ -47,6 +50,14 @@
 		>
 			{isGuest ? 'mirror' : visibility}
 		</span>
+		{#if sourceRemoved}
+			<span
+				class="border-danger text-danger shrink-0 rounded border px-2 py-0.5 font-mono text-[9px] tracking-wider uppercase"
+				title="The owner deleted this repository. Your local copy is kept; remove it from Settings when you no longer need it."
+			>
+				source removed
+			</span>
+		{/if}
 		{#if isGuest && !canWrite}
 			<span
 				class="border-border text-text-muted shrink-0 rounded border px-2 py-0.5 font-mono text-[9px] tracking-wider uppercase"

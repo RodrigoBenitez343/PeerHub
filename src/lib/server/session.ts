@@ -17,6 +17,7 @@ import SessionSync, {
 import { invalidateEntries } from './loaders.js';
 import { updateRepo } from './repos.js';
 import { broadcastAnnouncements } from './directory.js';
+import { gcChunks } from './chunks.js';
 import type PeerHubApp from './app.js';
 
 type Buf = Buffer | Uint8Array;
@@ -91,6 +92,10 @@ export default class DriveSession extends ReadyResource {
 	// True when this core is the repo's shared one. A guest joined before the
 	// meta key existed gets false: its own local core, never shared.
 	metaShared: boolean;
+	// Guest side: the owner no longer announces this repo, so its source is gone.
+	// The local copy is kept; it just stops counting as a live repo (app.ts
+	// markRemovedSources). Re-derived from the directory on every exchange.
+	sourceRemoved = false;
 
 	constructor({ app, id, name, icon, key, metaKey }: DriveSessionOptions) {
 		super();
@@ -325,6 +330,22 @@ export default class DriveSession extends ReadyResource {
 		await this.sync.ready();
 
 		log('sync ready');
+
+		// An interrupted commit can leave a chunk no manifest references. Sweep in
+		// the background (strictly throttled) so history stays proportional to what
+		// it still points at; a guest cannot delete from the shared drive, so it is
+		// the owner's job.
+		if (!this.isGuest) {
+			void gcChunks(this)
+				.then((stats) => {
+					if (!stats.skipped && stats.removed > 0) {
+						log('chunk gc', `${stats.removed} removed, ${stats.bytes} bytes`);
+					}
+				})
+				.catch((err: any) =>
+					console.warn(`[session ${this.id}] chunk gc failed:`, err?.message ?? err)
+				);
+		}
 
 		console.log(
 			`[session ${this.id}] opened — drives: ${this.drive!.drives.length}, key: ${b4a.toString(this.drive!.key, 'hex').slice(0, 12)}...`

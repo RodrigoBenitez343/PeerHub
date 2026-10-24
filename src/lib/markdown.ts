@@ -90,6 +90,27 @@ function resolveTarget(raw: string, opts: MarkdownOptions, kind: 'image' | 'link
 	return { href: mapped, external: false, label: href };
 }
 
+function emphasize(text: string): string {
+	return text
+		.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+		.replace(/__([^_]+)__/g, '<strong>$1</strong>')
+		.replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+		.replace(/(^|[\s(])_([^_\n]+)_/g, '$1<em>$2</em>')
+		.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+}
+
+// Placeholders hold finished HTML until the end, so emphasis cannot reach into
+// an href or an alt attribute. Tags nest (an image inside a link), so restoring
+// loops until no placeholder is left.
+function restore(text: string, marker: string, values: string[]): string {
+	for (let pass = 0; pass < 8 && text.includes(marker); pass++) {
+		text = text.replace(new RegExp(`${marker}(\\d+)${marker}`, 'g'), (_m, index: string) => {
+			return values[Number(index)] ?? '';
+		});
+	}
+	return text;
+}
+
 function inline(text: string, opts: MarkdownOptions = {}): string {
 	let out = escapeHtml(text);
 
@@ -100,6 +121,9 @@ function inline(text: string, opts: MarkdownOptions = {}): string {
 		return `\u0000${codes.length - 1}\u0000`;
 	});
 
+	const tags: string[] = [];
+	const stash = (html: string) => `\u0001${tags.push(html) - 1}\u0001`;
+
 	// ![alt](src "title")
 	out = out.replace(
 		/!\[([^\]]*)\]\(\s*([^)\s]+)(?:\s+&quot;([^&]*)&quot;)?\s*\)/g,
@@ -107,7 +131,9 @@ function inline(text: string, opts: MarkdownOptions = {}): string {
 			const target = resolveTarget(src, opts, 'image');
 			if (!target.href) return m;
 			const titleAttr = title ? ` title="${title}"` : '';
-			return `<img class="md-img" src="${target.href}" alt="${alt}"${titleAttr} loading="lazy" />`;
+			return stash(
+				`<img class="md-img" src="${target.href}" alt="${alt}"${titleAttr} loading="lazy" />`
+			);
 		}
 	);
 
@@ -116,29 +142,36 @@ function inline(text: string, opts: MarkdownOptions = {}): string {
 		/\[([^\]]+)\]\(\s*([^)\s]+)(?:\s+&quot;([^&]*)&quot;)?\s*\)/g,
 		(m, label: string, href: string) => {
 			const target = resolveTarget(href, opts, 'link');
-			if (!target.href) return label;
+			if (!target.href) return emphasize(label);
 			const external = target.external ? ' target="_blank" rel="noreferrer noopener"' : '';
-			return `<a class="md-link" href="${target.href}"${external}>${label}</a>`;
+			return stash(`<a class="md-link" href="${target.href}"${external}>${emphasize(label)}</a>`);
 		}
 	);
 
 	// <https://example.com>
 	out = out.replace(/&lt;((?:https?:|mailto:)[^\s&]+)&gt;/gi, (_m, href: string) => {
-		return `<a class="md-link" href="${href}" target="_blank" rel="noreferrer noopener">${href}</a>`;
+		return stash(
+			`<a class="md-link" href="${href}" target="_blank" rel="noreferrer noopener">${href}</a>`
+		);
 	});
 
-	out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-	out = out.replace(/__([^_]+)__/g, '<strong>$1</strong>');
-	out = out.replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-	out = out.replace(/(^|[\s(])_([^_\n]+)_/g, '$1<em>$2</em>');
-	out = out.replace(/~~([^~]+)~~/g, '<del>$1</del>');
-
+	out = restore(emphasize(out), '\u0001', tags);
 	out = out.replace(/\u0000(\d+)\u0000/g, (_m, index: string) => codes[Number(index)] ?? '');
 	return out;
 }
 
 function isTableDivider(line: string): boolean {
 	return /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(line) && line.includes('-');
+}
+
+// A table row is any line with a pipe, but a heading or a fence that happens to
+// contain one starts a new block instead of extending the table.
+function startsBlock(line: string): boolean {
+	return (
+		/^(#{1,6}\s|>\s?|\s*([-*+]|\d+\.)\s+)/.test(line) ||
+		/^\s*(`{3,}|~{3,})/.test(line) ||
+		/^\s*([-*_])\1{2,}\s*$/.test(line)
+	);
 }
 
 const LIST_ITEM = /^(\s*)([-*+]|\d+\.)\s+(.*)$/;
@@ -289,7 +322,7 @@ export function renderMarkdown(source: string, opts: MarkdownOptions = {}): stri
 			};
 			i += 2;
 			const rows: string[][] = [];
-			while (i < lines.length && lines[i].includes('|')) {
+			while (i < lines.length && lines[i].includes('|') && !startsBlock(lines[i])) {
 				rows.push(split(lines[i]));
 				i++;
 			}

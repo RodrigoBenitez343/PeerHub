@@ -1,12 +1,49 @@
 <script lang="ts">
 	import type { PageData, ActionData } from './$types';
 	import { enhance } from '$app/forms';
+	import { goto } from '$app/navigation';
 	import RepoHeader from '$lib/components/RepoHeader.svelte';
 	import Icon from '$lib/components/Icon.svelte';
+	import Spinner from '$lib/components/Spinner.svelte';
+	import { watchJob } from '$lib/jobs';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	let pending = $state(false);
+	let commitError = $state<string | null>(null);
+
+	// The commit itself runs as a server job; the button keeps its spinner until
+	// the new commit's sha is known, then opens the code page on it.
+	function onCommit() {
+		pending = true;
+		commitError = null;
+		return async ({ result, update }: { result: any; update: () => Promise<void> }) => {
+			try {
+				if (result.type === 'redirect') {
+					await goto(result.location);
+					return;
+				}
+				if (result.type === 'failure') {
+					await update();
+					return;
+				}
+				const jobId = result.data?.jobId;
+				if (!jobId) {
+					await update();
+					return;
+				}
+				const job = await watchJob(jobId);
+				const done = job.result as { branch: string; short: string };
+				await goto(
+					`/drive/${data.drive.id}/code?branch=${encodeURIComponent(done.branch)}&committed=${done.short}`
+				);
+			} catch (err: any) {
+				commitError = `Commit failed: ${err?.message ?? err}`;
+			} finally {
+				pending = false;
+			}
+		};
+	}
 
 	const badge = (status: string) => (status === 'added' ? 'A' : status === 'removed' ? 'D' : 'M');
 	const badgeClass = (status: string) =>
@@ -38,6 +75,7 @@
 		active="commit"
 		isGuest={data.drive.isGuest}
 		canWrite={data.drive.canWrite}
+		sourceRemoved={data.repo.sourceRemoved}
 		forkedFrom={data.repo.forkedFrom}
 	/>
 
@@ -69,6 +107,14 @@
 				class="border-danger/40 bg-danger/5 text-danger mb-4 rounded border px-3 py-2 font-mono text-[11px]"
 			>
 				{form.error}
+			</p>
+		{/if}
+
+		{#if commitError}
+			<p
+				class="border-danger/40 bg-danger/5 text-danger mb-4 rounded border px-3 py-2 font-mono text-[11px]"
+			>
+				{commitError}
 			</p>
 		{/if}
 
@@ -117,12 +163,7 @@
 			<form
 				method="POST"
 				action="?/commit"
-				use:enhance={() => {
-					pending = true;
-					return async () => {
-						pending = false;
-					};
-				}}
+				use:enhance={onCommit}
 				class="border-border bg-bg-secondary mt-4 rounded-lg border p-4"
 			>
 				<input type="hidden" name="branch" value={data.branch} />
@@ -150,8 +191,13 @@
 						disabled={pending}
 						class="bg-accent text-bg-primary flex shrink-0 items-center gap-2 rounded px-4 py-2 font-mono text-[10px] tracking-wider uppercase hover:brightness-110 disabled:opacity-50"
 					>
-						<Icon name="commit" size={14} />
-						{pending ? 'Committing…' : 'Commit'}
+						{#if pending}
+							<Spinner size={13} />
+							Committing…
+						{:else}
+							<Icon name="commit" size={14} />
+							Commit
+						{/if}
 					</button>
 				</div>
 			</form>

@@ -1,6 +1,7 @@
 import type { Actions, PageServerLoad } from './$types';
 import { fail, redirect } from '@sveltejs/kit';
 import { listRepoMeta, forkRepo } from '$lib/server/repos';
+import { isEnhancedRequest, type JobHandle } from '$lib/server/jobs';
 import {
 	broadcastAnnouncements,
 	directoryPeerCount,
@@ -39,6 +40,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 				defaultBranch: repo.defaultBranch,
 				peers: session.peerCount as number,
 				isGuest: session.isGuest as boolean,
+				// Owner deleted the repo this is a mirror of: still listed, no longer live.
+				sourceRemoved: !!session.sourceRemoved,
 				forkedFrom: repo.forkedFrom
 			};
 		})
@@ -189,6 +192,25 @@ export const actions: Actions = {
 		const description = (form.get('description') ?? '').toString();
 
 		if (!HEX64.test(driveKey)) return fail(400, { error: 'That repo published no drive key' });
+
+		if (isEnhancedRequest(request)) {
+			// A fork mirrors the whole repo and can run for a minute; answer with a
+			// job so the page stays usable and the button can poll.
+			const job = locals.app.jobs.start(
+				{ kind: 'fork', label: `Forking ${name}`, repoId },
+				async (handle: JobHandle) => {
+					const session = await forkRepo(locals.app, {
+						repoId,
+						name,
+						description: description || null,
+						driveKey
+					});
+					handle.progress(1, 1);
+					return { repoId: session.id, name: session.name };
+				}
+			);
+			return { jobId: job.id };
+		}
 
 		let session;
 		try {

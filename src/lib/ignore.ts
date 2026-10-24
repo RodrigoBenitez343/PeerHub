@@ -1,12 +1,14 @@
 // .gitignore parsing and matching, shared by the server (upload guard) and the
 // client (skip before sending bytes). Implements the subset that matters for
 // uploads: comments, negation, directory-only rules, anchoring, `*`/`?`/`**`,
-// nested .gitignore files (each rule is relative to its file's directory) and
-// last-match-wins.
+// escaped leading `!`/`#`, escaped trailing spaces, nested .gitignore files
+// (each rule is relative to its file's directory) and last-match-wins.
 //
-// Deliberately not covered: escaped leading `!`/`#`, `[a-z]` classes, and
-// trailing-space escaping. Those are rare in practice and would add a lot of
-// parser surface for an upload filter.
+// Two rules that are easy to get wrong, both taken from git:
+//  - `dir/` matches a *directory*; a plain file called `dir` is not ignored.
+//  - a negation cannot re-include a path whose parent directory is excluded.
+//
+// Deliberately not covered: `[a-z]` character classes.
 
 export interface IgnoreSource {
 	base: string; // directory that contains the .gitignore, '/' for the repo root
@@ -15,7 +17,10 @@ export interface IgnoreSource {
 
 interface Rule {
 	base: string;
-	regex: RegExp;
+	/** Matches the path itself and everything beneath it (directory semantics). */
+	below: RegExp;
+	/** What a file path is matched against: for `dir/` rules, strictly below. */
+	child: RegExp;
 	negate: boolean;
 	pattern: string;
 }
@@ -69,11 +74,12 @@ function compileSource(source: IgnoreSource): Rule[] {
 	const rules: Rule[] = [];
 
 	for (const rawLine of source.text.replace(/\r\n?/g, '\n').split('\n')) {
-		const line = rawLine.trim();
+		// git ignores trailing whitespace unless it is escaped with a backslash.
+		const line = rawLine.replace(/(\\?)\s+$/, (_match, escaped: string) => (escaped ? ' ' : ''));
 		if (!line || line.startsWith('#')) continue;
 
 		const negate = line.startsWith('!');
-		let body = negate ? line.slice(1).trim() : line;
+		let body = negate ? line.slice(1) : line;
 		if (!body) continue;
 
 		// `\#` / `\!` escapes: drop the backslash so the literal is matched.
@@ -82,23 +88,27 @@ function compileSource(source: IgnoreSource): Rule[] {
 		const anchored = body.startsWith('/');
 		if (anchored) body = body.slice(1);
 
-		// `dir/` means "a directory with this name". The trailing slash is not a
-		// path separator, so strip it before deciding whether the pattern is
-		// anchored to a path or matched against basenames.
+		// `dir/` means "a directory with this name": the trailing slash is not a
+		// separator, but it does change what the rule is allowed to match.
+		const dirOnly = /\/$/.test(body);
 		body = body.replace(/\/+$/, '');
 		if (!body) continue;
 
 		const hasSlash = body.includes('/');
-		const glob = globToRegex(body);
+		// An escaped trailing space is part of the name, not decoration.
+		const glob = globToRegex(body.replace(/\\ /g, ' '));
 		const prefix = base ? escapeRegex(base) + '/' : '/';
+		const head = `^${prefix}${anchored || hasSlash ? glob : `(?:.*/)?${glob}`}`;
 
-		// A rule that matches a directory also matches everything beneath it, so
-		// every pattern gets an optional `/…` suffix.
-		const regex = new RegExp(
-			anchored || hasSlash ? `^${prefix}${glob}(?:/.*)?$` : `^${prefix}(?:.*/)?${glob}(?:/.*)?$`
-		);
-
-		rules.push({ base: source.base, regex, negate, pattern: line });
+		rules.push({
+			base: source.base,
+			// A rule that matches a directory also matches everything beneath it.
+			below: new RegExp(`${head}(?:/.*)?$`),
+			// For `dir/`, the path has to be strictly inside the directory.
+			child: dirOnly ? new RegExp(`${head}/.+$`) : new RegExp(`${head}(?:/.*)?$`),
+			negate,
+			pattern: line
+		});
 	}
 
 	return rules;
@@ -117,18 +127,41 @@ export function compileIgnore(sources: IgnoreSource[]): IgnoreMatcher {
 	const ordered = [...sources].sort((a, b) => a.base.length - b.base.length);
 	const rules = ordered.flatMap(compileSource);
 
+	// Last match wins. `asDir` asks "is this directory itself excluded", which is
+	// what blocks a re-include from inside it.
+	const decide = (path: string, asDir: boolean): boolean => {
+		let ignored = false;
+		for (const rule of rules) {
+			if (!(asDir ? rule.below : rule.child).test(path)) continue;
+			ignored = !rule.negate;
+		}
+		return ignored;
+	};
+
+	const ancestorsOf = (path: string): string[] => {
+		const out: string[] = [];
+		let index = path.lastIndexOf('/');
+		while (index > 0) {
+			out.push(path.slice(0, index));
+			index = path.lastIndexOf('/', index - 1);
+		}
+		return out;
+	};
+
 	return {
 		rules: rules.length,
 		ignored(path: string): boolean {
 			const target = normalize(path);
 			if (isGitDir(target)) return true;
+			if (decide(target, false)) return true;
 
-			let ignored = false;
-			for (const rule of rules) {
-				if (!rule.regex.test(target)) continue;
-				ignored = !rule.negate;
+			// git: "It is not possible to re-include a file if a parent directory of
+			// that file is excluded." Without this, `build/` plus `!build/keep.md`
+			// would let a build artefact through.
+			for (const ancestor of ancestorsOf(target)) {
+				if (decide(ancestor, true)) return true;
 			}
-			return ignored;
+			return false;
 		}
 	};
 }

@@ -1,20 +1,57 @@
 <script lang="ts">
 	import type { PageData, ActionData } from './$types';
 	import { enhance } from '$app/forms';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import logo from '$lib/assets/images/ghost-mark.png';
 	import Icon from '$lib/components/Icon.svelte';
+	import Spinner from '$lib/components/Spinner.svelte';
+	import { watchJob } from '$lib/jobs';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	const action = $derived(page.url.searchParams.get('action'));
 	let pending = $state<string | null>(null);
+	let notice = $state<string | null>(null);
 
 	function submit(name: string) {
 		return () => {
 			pending = name;
 			return async () => {
 				pending = null;
+			};
+		};
+	}
+
+	// A fork runs in the background: the action answers with a job id, the button
+	// spins, and the new repo opens when the mirror finishes.
+	function forkSubmit(repoId: string, name: string) {
+		return () => {
+			pending = 'fork:' + repoId;
+			notice = null;
+			return async ({ result, update }: { result: any; update: () => Promise<void> }) => {
+				try {
+					if (result.type === 'redirect') {
+						await goto(result.location);
+						return;
+					}
+					if (result.type === 'failure') {
+						await update();
+						return;
+					}
+					const jobId = result.data?.jobId;
+					if (!jobId) {
+						await update();
+						return;
+					}
+					const job = await watchJob(jobId);
+					if (job.result?.repoId) await goto(`/drive/${job.result.repoId}/code`);
+					else notice = `Forked ${name}, but the new repo was not returned`;
+				} catch (err: any) {
+					notice = `Could not fork ${name}: ${err?.message ?? err}`;
+				} finally {
+					pending = null;
+				}
 			};
 		};
 	}
@@ -44,6 +81,14 @@
 				class="border-danger/40 bg-danger/5 text-danger mb-4 rounded border px-3 py-2 font-mono text-[11px]"
 			>
 				{form.error}
+			</p>
+		{/if}
+
+		{#if notice}
+			<p
+				class="border-danger/40 bg-danger/5 text-danger mb-4 rounded border px-3 py-2 font-mono text-[11px]"
+			>
+				{notice}
 			</p>
 		{/if}
 
@@ -227,6 +272,14 @@
 											>
 												{repo.isGuest ? 'mirror' : repo.visibility}
 											</span>
+											{#if repo.sourceRemoved}
+												<span
+													class="border-danger text-danger rounded border px-1.5 py-0.5 font-mono text-[9px] tracking-wider uppercase"
+													title="The owner deleted this repository. Your local copy is kept."
+												>
+													source removed
+												</span>
+											{/if}
 											{#if repo.forkedFrom}
 												<span class="text-text-muted font-mono text-[9px]">fork</span>
 											{/if}
@@ -352,7 +405,7 @@
 											<form
 												method="POST"
 												action="?/fork"
-												use:enhance={submit('fork:' + repo.repoId)}
+												use:enhance={forkSubmit(repo.repoId, repo.name)}
 											>
 												<input type="hidden" name="driveKey" value={repo.driveKey} />
 												<input type="hidden" name="repoId" value={repo.repoId} />
@@ -361,10 +414,15 @@
 												<button
 													type="submit"
 													disabled={pending === 'fork:' + repo.repoId}
-													class="border-border text-text-secondary hover:border-accent hover:text-accent rounded border px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition disabled:opacity-50"
+													class="border-border text-text-secondary hover:border-accent hover:text-accent flex items-center gap-1.5 rounded border px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition disabled:opacity-50"
 													title="Copy this repo to your device"
 												>
-													Fork
+													{#if pending === 'fork:' + repo.repoId}
+														<Spinner size={11} />
+														Forking…
+													{:else}
+														Fork
+													{/if}
 												</button>
 											</form>
 										</div>

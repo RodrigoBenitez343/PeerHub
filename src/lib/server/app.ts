@@ -12,7 +12,13 @@ import def from '../../../spec/hyperdb/index.js';
 import { ensureDefaultProfile } from './users.js';
 import { ensureCliToken } from './cli-token.js';
 import { registerRepo } from './repos.js';
-import { attachDirectory, broadcastAnnouncements } from './directory.js';
+import { JobRunner } from './jobs.js';
+import {
+	attachDirectory,
+	broadcastAnnouncements,
+	pruneAnnouncements,
+	refreshAnnouncements
+} from './directory.js';
 
 interface PeerHubAppOptions {
 	dir?: string;
@@ -54,6 +60,13 @@ export default class PeerHubApp extends ReadyResource {
 	 * exchange would be skipped as "no peers".
 	 */
 	directoryPeers: Set<any>;
+	/**
+	 * Peers with an open directory channel. Used to keep a quiet-but-connected
+	 * peer's announcements alive while a disappeared peer's rows expire.
+	 */
+	directoryRemotes: Set<string>;
+	/** Long file operations that outlive the request that started them. */
+	jobs: JobRunner;
 
 	constructor({ dir = '', bootstrap = null }: PeerHubAppOptions = {}) {
 		super();
@@ -70,6 +83,8 @@ export default class PeerHubApp extends ReadyResource {
 		this.directoryTimer = null;
 		this.directoryWarmup = [];
 		this.directoryPeers = new Set();
+		this.directoryRemotes = new Set();
+		this.jobs = new JobRunner();
 	}
 
 	protected async _open(): Promise<void> {
@@ -119,6 +134,13 @@ export default class PeerHubApp extends ReadyResource {
 		if (refreshMs > 0) {
 			this.directoryTimer = setInterval(() => {
 				this.refreshDirectory().catch(() => {});
+				// Re-announce and re-ask in the same tick: our rows on a peer's side
+				// stay fresh, and rows from a peer that stopped answering expire.
+				void (async () => {
+					await refreshAnnouncements(this).catch(() => {});
+					await broadcastAnnouncements(this).catch(() => {});
+					await pruneAnnouncements(this).catch(() => {});
+				})();
 			}, refreshMs);
 			// Never a reason to keep the process alive on its own.
 			this.directoryTimer.unref?.();
@@ -135,6 +157,10 @@ export default class PeerHubApp extends ReadyResource {
 
 		await ensureDefaultProfile(this);
 		log('default profile ensured');
+
+		// Rows left by a peer that is not here any more must not wait for the first
+		// refresh tick to disappear.
+		await pruneAnnouncements(this).catch(() => {});
 
 		this.cliToken = ensureCliToken(this.dir);
 		log('cli token ready');
@@ -280,6 +306,23 @@ export default class PeerHubApp extends ReadyResource {
 		// Peers treat a push as our complete list, so this retires the announcement
 		// instead of leaving the repo listed as public forever.
 		await broadcastAnnouncements(this).catch(() => {});
+	}
+
+	// Peers report their complete repo list; a mirror whose source is no longer in
+	// it belongs to a repo the owner deleted. The local copy stays (those files
+	// are this peer's own), but it must stop looking like a live repo. A source
+	// that announces again clears the mark.
+	markRemovedSources(gone: string[], live: string[]): void {
+		if (gone.length === 0 && live.length === 0) return;
+
+		const goneSet = new Set(gone);
+		const liveSet = new Set(live);
+		for (const session of this.sessions.values()) {
+			if (!session.isGuest || !session.drive) continue;
+			const key = b4a.toString(session.drive.key, 'hex');
+			if (liveSet.has(key)) session.sourceRemoved = false;
+			else if (goneSet.has(key)) session.sourceRemoved = true;
+		}
 	}
 
 	listSessions(): SessionInfo[] {

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import FileItem from './FileItem.svelte';
 	import Modal from './Modal.svelte';
+	import Spinner from './Spinner.svelte';
 	import { detectKind } from '$lib';
 	import { compileIgnore, pickedRelPath, planUpload, type IgnoreSource } from '$lib/ignore';
 	import { invalidateAll } from '$app/navigation';
@@ -44,6 +45,14 @@
 	let notice = $state<string | null>(null);
 	let pendingDelete = $state<Entry | null>(null);
 	let confirmDelete = $state(false);
+
+	// A determinate bar when the batch size is known; the spinner covers the
+	// moment between the picker closing and the first request.
+	const uploadPercent = $derived(
+		uploading && uploading.total > 0
+			? Math.min(100, Math.round((uploading.done / uploading.total) * 100))
+			: null
+	);
 
 	// Encode per segment: a full encodeURIComponent would turn the separators into
 	// %2F and hand the route one giant segment.
@@ -245,6 +254,28 @@
 <input bind:this={fileInput} type="file" multiple class="hidden" onchange={uploadFiles} />
 <input bind:this={folderInput} type="file" webkitdirectory class="hidden" onchange={uploadFiles} />
 
+{#if uploading && entries.length === 0 && !query}
+	<!-- The toolbar is not rendered for an empty drive, so the first upload
+	needs its own progress line or the page looks frozen. -->
+	<div class="border-border bg-bg-secondary border-b px-3 py-2">
+		<div class="flex items-center gap-2">
+			<Spinner size={11} class="text-accent" />
+			<span class="text-accent truncate font-mono text-[10px] tracking-wider uppercase">
+				{uploading.done}/{uploading.total} · {uploading.name}
+			</span>
+			<span class="text-text-muted ml-auto shrink-0 font-mono text-[9px]">
+				{uploadPercent ?? 0}%
+			</span>
+		</div>
+		<div class="bg-bg-tertiary mt-1.5 h-0.5 w-full overflow-hidden rounded">
+			<div
+				class="bg-accent h-full transition-[width] duration-200"
+				style="width: {uploadPercent ?? 0}%"
+			></div>
+		</div>
+	</div>
+{/if}
+
 {#if entries.length === 0 && !query}
 	<div class="flex h-full items-center justify-center">
 		{#if peers === 0 && isGuest}
@@ -343,9 +374,14 @@
 				<button
 					onclick={() => fileInput?.click()}
 					disabled={!!uploading}
-					class="border-border text-text-secondary hover:border-accent-dim hover:text-accent order-1 shrink-0 rounded border px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition disabled:opacity-50"
+					class="border-border text-text-secondary hover:border-accent-dim hover:text-accent order-1 flex shrink-0 items-center gap-1.5 rounded border px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition disabled:opacity-50"
 				>
-					{uploading ? 'Uploading' : 'Upload'}
+					{#if uploading}
+						<Spinner size={10} />
+						Uploading
+					{:else}
+						Upload
+					{/if}
 				</button>
 				<button
 					onclick={() => folderInput?.click()}
@@ -478,11 +514,23 @@
 		</div>
 
 		{#if uploading || notice}
-			<div class="border-border flex items-center gap-2 border-t px-3 py-1.5">
+			<div class="border-border border-t px-3 py-1.5">
 				{#if uploading}
-					<span class="text-accent font-mono text-[10px] tracking-wider uppercase">
-						{uploading.done}/{uploading.total} · {uploading.name}
-					</span>
+					<div class="flex items-center gap-2">
+						<Spinner size={10} class="text-accent" />
+						<span class="text-accent truncate font-mono text-[10px] tracking-wider uppercase">
+							{uploading.done}/{uploading.total} · {uploading.name}
+						</span>
+						<span class="text-text-muted ml-auto shrink-0 font-mono text-[9px]">
+							{uploadPercent ?? 0}%
+						</span>
+					</div>
+					<div class="bg-bg-tertiary mt-1.5 h-0.5 w-full overflow-hidden rounded">
+						<div
+							class="bg-accent h-full transition-[width] duration-200"
+							style="width: {uploadPercent ?? 0}%"
+						></div>
+					</div>
 				{:else if notice}
 					<span class="text-danger font-mono text-[10px]">{notice}</span>
 				{/if}

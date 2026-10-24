@@ -121,6 +121,14 @@
 									>
 										{repo.mirror ? 'mirror' : repo.visibility}
 									</span>
+									{#if repo.sourceRemoved}
+										<span
+											class="border-danger text-danger rounded border px-1.5 py-0.5 font-mono text-[9px] tracking-wider uppercase"
+											title="The owner deleted this repository. Your local copy is kept."
+										>
+											source removed
+										</span>
+									{/if}
 									{#if repo.kind === 'own' && !repo.mirror}
 										<span class="text-text-muted font-mono text-[9px] uppercase">yours</span>
 									{/if}

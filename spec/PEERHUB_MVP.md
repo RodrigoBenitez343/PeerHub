@@ -108,10 +108,35 @@ stored in the repo DB, referencing content in the drive:
   `crypto_generichash`, larger ones fall back to `size:mtime`).
 - `ref` record: `{ repoId, name (branch/tag), sha }` — branch = movable pointer, default `main`.
 - Diffs derive by comparing `treeDigest` maps (`diffTrees()`); the parent chain gives history.
-- **Known gap:** the digest only records _what_ the tree looked like, not the bytes. Checking a
-  file out at an old commit needs content-addressed blob snapshots (Hypercore keeps the old
-  blocks, but nothing records which block belonged to which commit) — separate later task.
-  Browsing therefore always shows the live working tree.
+- Content for restore lives under `/.peerhub/history/<sha>/<path>` (see 3.2.1).
+- **Known gap:** browsing always shows the live working tree; per-commit file browsing is not
+  wired into the UI yet, even though the content to do it exists.
+
+#### 3.2.1 Chunked history storage (`chunks.ts`)
+
+A digest says _that_ a file changed, never what it contained, so `writeSnapshots()` stores the
+changed paths. Copying them whole made history the size of the file per commit, so above
+`DELTA_THRESHOLD` (4 MiB, the same cap as the digest) a record is a **manifest of
+content-addressed chunks** instead of the bytes:
+
+- The file is cut into content-defined chunks (gear rolling hash over the last 32 bytes, 64 KiB
+  min, ~512 KiB average, 1 MiB max). Boundaries follow content, so an edit only disturbs its own
+  neighbourhood — an insert does not shift every following chunk, unlike a fixed-size grid.
+- Each chunk is stored once at `/.peerhub/chunks/<blake32hex>`; the manifest is a JSON list of
+  hashes with a `PEERHUB-DELTA/1` magic header. Unchanged regions cost one hash per commit, and
+  the same region in two files shares one chunk.
+- `readVersion()` sniffs the magic: a manifest is reassembled from the chunk store, anything else
+  is a plain snapshot and streams through. Records written before chunks existed still restore.
+- Small files (at or below the threshold) are still copied whole: a manifest would cost more
+  than the file.
+- Measured (12 MiB binary, local host): first commit 20 chunks / 12 MiB, a 4 KiB in-place edit
+  +1 chunk / 705 KiB, a 100-byte insert at 2 MiB +2 chunks / 1128 KiB, restore byte-exact.
+- `gcChunks()` (owner only, once per session open, throttled to one run a day by
+  `/.peerhub/chunks/.gc`) collects the hashes every history record names and deletes the rest —
+  chunks left by an interrupted commit are the only orphans, since commits are never deleted. An
+  unparsable manifest aborts the sweep, chunks newer than a one-hour grace period are kept (an
+  in-flight commit writes chunks before its manifest), and only `<64 hex>` names are ever removed.
+- Remaining cost: a restore of a deep chain reads every chunk of that version.
 
 Changes: `src/lib/server/git.ts` now owns `commit()`, `createBranch()`, `getRef()/listRefs()`,
 `getCommit()/listCommits()`, `diffTrees()`, `buildTree()` and `previewFile()`. UI is the
@@ -143,6 +168,21 @@ base64 pattern in loaders.ts bufferToDataUri), joinedAt }`.
 - `activity` record (append-only): `{ id, actorKey, repoId, type ('push'|'issue'|'pr'|'review'|
 'star'|'fork'), refId, ts }` — powers Contributions graph and Watch.
 - `notification` record: `{ toKey, activityId, read }` fan-out on watch/star/mention.
+
+### 3.6 Background jobs (`jobs.ts`, `/api/jobs`)
+
+- File operations that take longer than a page render (fork a repo, commit a tree, run a sync
+  pass) no longer hold the form submission open. An enhanced form action starts a job on
+  `app.jobs` and answers `{ jobId }` immediately; a plain no-JS post still runs the old blocking
+  path and redirects.
+- `JobRunner` reports `{ state, done, total, result, error }`. Work runs detached, a failure is
+  stored on the job (never an unhandled rejection), progress is monotonic, and finished jobs are
+  trimmed to 50. `GET /api/jobs?id=` returns one job, `GET /api/jobs` the recent list.
+- The page polls with `$lib/jobs.ts` (`watchJob`) while the button shows a spinner, then navigates
+  on `result` (fork → new repo, commit → code page at the new sha) or shows the job's error.
+- Not a `worker_threads` pool on purpose: the work is Hyperdrive I/O and a corestore cannot be
+  opened twice in one process (file lock). Uploads stay client-driven (`FileGrid`) with a spinner
+  and a determinate progress bar; the server writes each file through an already-async route.
 
 ---
 
@@ -321,7 +361,13 @@ Numbering, uniqueness and secondary-index style follow the existing
 ## 6. New server modules / files
 
 - `src/lib/server/git.ts` — commit model, refs, diffs, snapshot from `shared-drive.manifest()`.
+- `src/lib/server/chunks.ts` — content-defined chunking, chunk store and reassembly for history.
 - `src/lib/server/repos.ts` — repo CRUD wrapper over `DriveSession` + per-repo `hyperdb`.
+- `src/lib/server/jobs.ts` — detached job runner (`app.jobs`) for long file operations; reports
+  `state`/`done`/`total`/`result`/`error` (see 3.6).
+- `src/lib/jobs.ts` — client poller (`watchJob`): resolves on the job result, rejects with the job
+  error, times out after 15 min.
+- `src/routes/api/jobs/+server.ts` — `GET /api/jobs?id=` one job, `GET /api/jobs` the recent list.
 - `src/lib/server/social.ts` — star/fork/watch/follow/contributions ops.
 - `src/lib/server/tracker.ts` — issue/PR/label/milestone/review/comment ops (the "issues engine").
 - `src/lib/server/events.ts` — `activity` insert → webhook fan-out + notifications.
@@ -546,6 +592,11 @@ guest read-only by key, guest writes forwarded over RPC) as described in 3.1. Sc
   the new repo's shared folder, records `forkedFrom`/`sourceKey` on the catalog row, writes a
   `forks` row into the _new_ repo's meta (the source log belongs to its owner), and removes the
   half-made repo if the source peer does not answer within 45 s.
+- `jobs.ts` — the `JobRunner` behind `app.jobs`. An enhanced form action (fork, commit, "Sync
+  now") starts a job and answers `{ jobId }` at once; the page polls `/api/jobs` while the button
+  spins, then navigates on `result` or shows `error`. A plain no-JS post keeps the blocking path,
+  decided by `isEnhancedRequest()`. Not a `worker_threads` pool: the work is Hyperdrive I/O and a
+  corestore cannot be opened twice in one process.
 - `src/lib/markdown.ts` — dependency-free renderer (headings, lists, quotes, fenced code,
   tables, hr, inline code/bold/italic/strike, links, images). Everything is escaped before any
   rule runs and link targets are restricted to http(s)/mailto/relative, so a repo cannot inject
@@ -822,6 +873,10 @@ default is **owner → peers**, then **newest → oldest**.
 - `pull`: repo → folder only. Repo deletions delete the local copy; local additions/edits/
   deletions are counted in `SyncSummary.skipped` and deliberately **not recorded** in the sync
   state, so switching to two-way later still pushes them.
+- Small files (≤ 4 MiB) store a content digest in the sync state. Size+mtime alone missed an edit
+  that kept the length and landed inside `MTIME_SLACK` (2 s); a commit running right after such an
+  edit pushed the old bytes. The digest is consulted only when size matches and the mtime drifted
+  inside the tolerance, so a normal run still does no extra reads.
 - `two-way`: local changes may push, but each path is decided by version: a push happens only
   when the local copy is newer than the repo's by more than `MTIME_SLACK`; a tie or an older
   copy pulls instead and counts as a conflict. This is the newest → oldest rule, applied per
@@ -944,6 +999,37 @@ not list every public repo. Four separate defects, all in production only or in 
   the entry on every connected peer.
 - `createSession()` now **awaits** the broadcast (bounded by a 1.5 s timeout per send), so a repo
   created by the user has reached connected peers before the page navigates.
+
+**3b. Announce replies were merge-only (deletes did not propagate)**
+
+- Step 3 fixed `push` but left `announce` returning a bare array. The connect-time exchange and
+  every home-page refresh therefore merged rows and never retired them, so a repo deleted while
+  a peer was offline — or while its directory channel happened not to be open at broadcast time
+  — stayed listed on that peer forever, and each reconnect refreshed its `lastSeen`.
+- **Fix**: `announce` replies with the same `{ peerKey, repos }` envelope, so every exchange is
+  authoritative and self-healing. Plus `app.markRemovedSources(gone, live)`: a _mirror_ of a repo
+  whose source disappeared is kept on disk (those files are the peer's own copy) but flagged
+  `session.sourceRemoved` and shown as `source removed` in the home/explore lists and repo header.
+  A source that announces again clears the flag.
+- **Verified with two live peers** (one machine, two data dirs, same DHT topic): A creates a
+  public repo → B lists it; B killed; A deletes, so the push reaches nobody; B restarted with A
+  still down → the stale row is still listed (bug precondition); A started → B drops it within
+  1 s, from the connect-time `announce` exchange alone.
+- The offline case is covered by expiry (3c) below: a peer that never comes back can no longer keep
+  its repos in somebody else's list.
+
+**3c. Announcements never expired**
+
+- A peer that deletes a repo while another peer is offline (and never returns) left that row in
+  the other peer's list forever: pruning only happened when the sender spoke again.
+- **Fix**: rows carry `lastSeen`; `pruneAnnouncements()` drops a row whose sender has been silent
+  longer than `ANNOUNCEMENT_TTL_MS` (5 min, `PEERHUB_ANNOUNCEMENT_TTL_MS`) and has **no open
+  directory channel**, then calls `markRemovedSources()` so mirrors show `source removed`. The
+  refresh tick (60 s) now pulls, re-pushes and prunes, and boot prunes once. A quiet but still
+  connected peer is never expired — a live channel is proof of life.
+- `refreshAnnouncements()` now attributes each reply to the channel it arrived on (`rpc._remote`),
+  the same rule as connect-time announce: a forged `peerKey` can no longer prune another peer's
+  rows through a refresh reply.
 
 **4. Discovery raced the other peer's announce**
 

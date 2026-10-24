@@ -118,7 +118,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			description: repo?.description ?? null,
 			visibility: repo?.visibility ?? 'public',
 			defaultBranch: repo?.defaultBranch ?? DEFAULT_BRANCH,
-			forkedFrom: repo?.forkedFrom ?? null
+			forkedFrom: repo?.forkedFrom ?? null,
+			sourceRemoved: !!session.sourceRemoved
 		},
 		branch,
 		branches,

@@ -53,6 +53,7 @@
 		active="files"
 		isGuest={drive.isGuest}
 		canWrite={drive.canWrite}
+		sourceRemoved={data.repo.sourceRemoved}
 		forkedFrom={data.repo.forkedFrom}
 	/>
 	<div class="border-border bg-bg-secondary flex items-center gap-2 border-b px-3 py-1.5 md:px-4">

@@ -1,10 +1,45 @@
 <script lang="ts">
 	import type { PageData } from './$types';
+	import { enhance } from '$app/forms';
+	import { goto } from '$app/navigation';
 	import RepoHeader from '$lib/components/RepoHeader.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import Markdown from '$lib/components/Markdown.svelte';
+	import Spinner from '$lib/components/Spinner.svelte';
+	import { watchJob } from '$lib/jobs';
 
 	let { data }: { data: PageData } = $props();
+
+	let forkPending = $state(false);
+	let forkError = $state<string | null>(null);
+
+	function onFork() {
+		forkPending = true;
+		forkError = null;
+		return async ({ result, update }: { result: any; update: () => Promise<void> }) => {
+			try {
+				if (result.type === 'redirect') {
+					await goto(result.location);
+					return;
+				}
+				if (result.type === 'failure') {
+					await update();
+					return;
+				}
+				const jobId = result.data?.jobId;
+				if (!jobId) {
+					await update();
+					return;
+				}
+				const job = await watchJob(jobId);
+				if (job.result?.repoId) await goto(`/drive/${job.result.repoId}/code`);
+			} catch (err: any) {
+				forkError = `Could not fork: ${err?.message ?? err}`;
+			} finally {
+				forkPending = false;
+			}
+		};
+	}
 
 	function bytes(n: number): string {
 		if (n < 1024) return `${n} B`;
@@ -61,6 +96,7 @@
 		active="code"
 		isGuest={data.drive.isGuest}
 		canWrite={data.drive.canWrite}
+		sourceRemoved={data.repo.sourceRemoved}
 		forkedFrom={data.repo.forkedFrom}
 	/>
 
@@ -198,23 +234,37 @@
 						</a>
 					{/if}
 					{#if data.drive.isGuest && data.repo.visibility === 'public' && data.driveKey}
-						<form method="POST" action="/?/fork">
+						<form method="POST" action="/?/fork" use:enhance={onFork}>
 							<input type="hidden" name="driveKey" value={data.driveKey} />
 							<input type="hidden" name="repoId" value={data.drive.id} />
 							<input type="hidden" name="name" value={data.drive.name} />
 							<input type="hidden" name="description" value={data.repo.description ?? ''} />
 							<button
 								type="submit"
-								class="border-border text-text-secondary hover:border-accent hover:text-accent flex items-center gap-1.5 rounded border px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition"
+								disabled={forkPending}
+								class="border-border text-text-secondary hover:border-accent hover:text-accent flex items-center gap-1.5 rounded border px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition disabled:opacity-50"
 								title="Copy this repo to your device"
 							>
-								<Icon name="fork" size={13} />
-								Fork
+								{#if forkPending}
+									<Spinner size={11} />
+									Forking…
+								{:else}
+									<Icon name="fork" size={13} />
+									Fork
+								{/if}
 							</button>
 						</form>
 					{/if}
 				</div>
 			</div>
+
+			{#if forkError}
+				<p
+					class="border-danger/40 bg-danger/5 text-danger border-b px-4 py-1.5 font-mono text-[10px]"
+				>
+					{forkError}
+				</p>
+			{/if}
 
 			{#if data.selected}
 				{#if data.file}

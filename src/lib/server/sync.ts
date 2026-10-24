@@ -8,6 +8,7 @@ import { writeIntoStream } from './shared-drive.js';
 import { invalidateEntries } from './loaders.js';
 import { loadIgnoreSources } from './ignores.js';
 import { isReservedRepoPath } from './paths.js';
+import { DIGEST_SIZE_CAP, digestBytes } from './git.js';
 import { compileIgnore, type IgnoreMatcher, type IgnoreSource } from '$lib/ignore';
 import type DriveSession from './session.js';
 
@@ -23,9 +24,16 @@ import type DriveSession from './session.js';
 // The last known state of each path is kept per side, so a copy is only redone
 // when that side actually changed — a fresh mtime on the receiving side can
 // never bounce back and forth.
+//
+// mtime alone is not enough: an editor can rewrite a file with the same length
+// inside the two-second tolerance, and that edit used to be invisible (a commit
+// would snapshot the old bytes). Small files therefore also store a content
+// digest in the state, consulted exactly in that ambiguous window. Large files
+// keep the size+mtime rule, where hashing would cost more than the copy.
 
 const AUTO_INTERVAL = 15_000;
 const MTIME_SLACK = 2000;
+const DIGEST_CAP = DIGEST_SIZE_CAP;
 const IGNORED_FILES = new Set(['.ds_store', 'thumbs.db', 'desktop.ini']);
 const TEMP_SUFFIX = '.localdrive.tmp';
 
@@ -71,6 +79,8 @@ export interface SyncSummary {
 interface SideStat {
 	size: number;
 	mtime: number | null;
+	/** Content hash for files up to DIGEST_CAP; absent for large files and old state. */
+	digest?: string;
 }
 
 interface StateEntry {
@@ -388,15 +398,27 @@ async function syncOnce(
 
 		const localEntry = await local.entry(filePath).catch(() => null);
 		if (localEntry && !localEntry.value?.linkname) {
+			const size = localEntry.value?.blob?.byteLength ?? 0;
 			entry.local = {
-				size: localEntry.value?.blob?.byteLength ?? 0,
-				mtime: typeof localEntry.mtime === 'number' ? localEntry.mtime : null
+				size,
+				mtime: typeof localEntry.mtime === 'number' ? localEntry.mtime : null,
+				digest:
+					size <= DIGEST_CAP
+						? await cappedDigest(local.createReadStream(filePath)).catch(() => undefined)
+						: undefined
 			};
 		}
 
 		const sharedEntry = await drive.statShared(filePath).catch(() => null);
 		if (sharedEntry?.exists) {
-			entry.shared = { size: sharedEntry.size, mtime: sharedEntry.mtime };
+			entry.shared = {
+				size: sharedEntry.size,
+				mtime: sharedEntry.mtime,
+				digest:
+					sharedEntry.size <= DIGEST_CAP
+						? await cappedDigest(drive.readShared(filePath)).catch(() => undefined)
+						: undefined
+			};
 		}
 
 		if (entry.local || entry.shared) state[filePath] = entry;
@@ -431,8 +453,12 @@ async function syncOnce(
 			continue;
 		}
 
-		const localChanged = !unchanged(localStat, base?.local);
-		const sharedChanged = !unchanged(sharedStat, base?.shared);
+		const localChanged = await changed(localStat, base?.local, () =>
+			cappedDigest(local.createReadStream(filePath))
+		);
+		const sharedChanged = await changed(sharedStat, base?.shared, () =>
+			cappedDigest(drive.readShared(filePath))
+		);
 		if (!localChanged && !sharedChanged) continue;
 
 		try {
@@ -597,14 +623,49 @@ async function localScan(
 	return { files, sources };
 }
 
-function unchanged(current: SideStat | undefined, previous: SideStat | undefined): boolean {
-	if (!current && !previous) return true;
-	if (!current || !previous) return false;
-	if (current.size !== previous.size) return false;
+/**
+ * Has `current` moved away from `previous`?
+ *
+ * Size decides first. When the size matches and the mtime is unchanged, the
+ * file is untouched. When the size matches but the mtime drifted inside the
+ * tolerance, that is the ambiguous case a fast same-size edit produces, so the
+ * content is hashed and compared with the digest stored at record time.
+ */
+async function changed(
+	current: SideStat | undefined,
+	previous: SideStat | undefined,
+	hash: () => Promise<string | undefined>
+): Promise<boolean> {
+	if (!current && !previous) return false;
+	if (!current || !previous) return true;
+	if (current.size !== previous.size) return true;
+
 	if (current.mtime != null && previous.mtime != null) {
-		return Math.abs(current.mtime - previous.mtime) <= MTIME_SLACK;
+		const drift = Math.abs(current.mtime - previous.mtime);
+		if (drift > MTIME_SLACK) return true;
+		if (drift === 0) return false;
 	}
-	return true;
+
+	// Old state files have no digest; keep the previous behaviour for them rather
+	// than re-copying every file once after an upgrade.
+	if (!previous.digest) return false;
+	const digest = await hash().catch(() => undefined);
+	if (!digest) return false;
+	return digest !== previous.digest;
+}
+
+async function cappedDigest(
+	source: AsyncIterable<Buffer | Uint8Array>
+): Promise<string | undefined> {
+	const parts: Uint8Array[] = [];
+	let size = 0;
+	for await (const chunk of source) {
+		const buf = Buffer.from(chunk);
+		size += buf.byteLength;
+		if (size > DIGEST_CAP) return undefined;
+		parts.push(buf);
+	}
+	return digestBytes(Buffer.concat(parts));
 }
 
 // Newest → oldest. The folder may only overwrite the repo when its copy is

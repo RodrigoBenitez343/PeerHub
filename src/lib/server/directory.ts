@@ -67,8 +67,16 @@ export async function ownAnnouncements(app: PeerHubApp): Promise<Announcement[]>
 
 // Only take the keys when the peer actually published them, and only when they
 // look like keys. Anything else is dropped instead of stored half-valid.
-function sanitize(app: PeerHubApp, raw: any): Announcement | null {
-	if (!raw || typeof raw.peerKey !== 'string' || raw.peerKey === selfHex(app)) return null;
+//
+// `from` is the key of the connection the payload arrived on. When it is known it
+// wins over whatever the payload claims: a peer may only speak for itself, so a
+// forged `peerKey` can neither store rows under somebody else's name nor prune
+// their repos from our list.
+function sanitize(app: PeerHubApp, raw: any, from: string | null = null): Announcement | null {
+	if (!raw || typeof raw !== 'object') return null;
+
+	const peerKey = from ?? (typeof raw.peerKey === 'string' ? raw.peerKey : '');
+	if (!HEX64.test(peerKey) || peerKey === selfHex(app)) return null;
 	if (typeof raw.repoId !== 'string' || typeof raw.name !== 'string') return null;
 	if (!raw.repoId || !raw.name) return null;
 
@@ -78,7 +86,7 @@ function sanitize(app: PeerHubApp, raw: any): Announcement | null {
 	const metaKey = typeof raw.metaKey === 'string' && HEX64.test(raw.metaKey) ? raw.metaKey : null;
 
 	return {
-		peerKey: raw.peerKey,
+		peerKey,
 		repoId: raw.repoId,
 		name: raw.name.slice(0, 120),
 		description: typeof raw.description === 'string' ? raw.description.slice(0, 500) : null,
@@ -100,14 +108,16 @@ export interface PushEnvelope {
 
 export async function ingestAnnouncements(
 	app: PeerHubApp,
-	payload: string | Announcement[] | PushEnvelope
+	payload: string | Announcement[] | PushEnvelope,
+	from: string | null = null
 ): Promise<number> {
 	if (!app.db) return 0;
 
+	const transport = from && HEX64.test(from) ? from : null;
 	const parsed = (typeof payload === 'string' ? safeParse(payload) : payload) as
 		Announcement[] | PushEnvelope | null;
 	let list: any[] = [];
-	let sender: string | null = null;
+	let sender: string | null = transport;
 
 	if (Array.isArray(parsed)) {
 		list = parsed;
@@ -116,7 +126,8 @@ export async function ingestAnnouncements(
 		// what lets a deleted repo disappear here instead of lingering forever.
 		const envelope = parsed as PushEnvelope;
 		list = Array.isArray(envelope.repos) ? (envelope.repos as any[]) : [];
-		sender =
+		// Without a transport key, the payload is all we have (older peer, local call).
+		sender ??=
 			typeof envelope.peerKey === 'string' && HEX64.test(envelope.peerKey)
 				? envelope.peerKey
 				: null;
@@ -125,7 +136,7 @@ export async function ingestAnnouncements(
 	let stored = 0;
 	const accepted: Announcement[] = [];
 	for (const raw of list) {
-		const record = sanitize(app, raw);
+		const record = sanitize(app, raw, transport);
 		if (!record) continue;
 		await app.db.insert('@ghostdrive/announcements', record);
 		accepted.push(record);
@@ -134,6 +145,7 @@ export async function ingestAnnouncements(
 
 	// The sender's list is authoritative for the sender: drop the repos it no
 	// longer hosts. A bare array carries no sender, so it is merged only.
+	const removed: Announcement[] = [];
 	if (sender && sender !== selfHex(app)) {
 		const live = new Set(accepted.map((record) => record.repoId));
 		const known = (await app.db
@@ -141,11 +153,22 @@ export async function ingestAnnouncements(
 			.toArray()) as Announcement[];
 		for (const row of known) {
 			if (live.has(row.repoId)) continue;
+			removed.push(row);
 			await app.db.delete('@ghostdrive/announcements', {
 				peerKey: row.peerKey,
 				repoId: row.repoId
 			});
 		}
+	}
+
+	// A mirror of a repo the owner stopped announcing is this peer's own copy of
+	// the files, so it is not deleted — but it must stop looking like a live
+	// repo. Cleared again if the owner starts announcing it.
+	const keyOf = (record: Announcement) => record.driveKey;
+	const goneKeys = removed.map(keyOf).filter((key): key is string => !!key);
+	const liveKeys = accepted.map(keyOf).filter((key): key is string => !!key);
+	if (goneKeys.length > 0 || liveKeys.length > 0) {
+		app.markRemovedSources(goneKeys, liveKeys);
 	}
 
 	if (stored > 0 || sender) await app.db.flush();
@@ -181,22 +204,84 @@ export async function listAnnouncements(app: PeerHubApp): Promise<Announcement[]
 	return rows.sort((a, b) => b.lastSeen - a.lastSeen);
 }
 
+/**
+ * How long a peer's repo list stays listed without a refresh. Peers re-announce
+ * on every refresh tick, well inside this window. A non-numeric override falls
+ * back to the default instead of expiring everything at once.
+ */
+const TTL_OVERRIDE = Number(process.env.PEERHUB_ANNOUNCEMENT_TTL_MS);
+export const ANNOUNCEMENT_TTL_MS =
+	Number.isFinite(TTL_OVERRIDE) && TTL_OVERRIDE > 0 ? TTL_OVERRIDE : 5 * 60_000;
+
+/**
+ * Forget repos announced by peers that stopped answering.
+ *
+ * A deletion only reaches peers that were connected at the time; a peer that
+ * went offline before it is otherwise listed forever. A row is kept while its
+ * peer has an open directory channel, so a quiet-but-connected peer is never
+ * expired — only a peer that is both silent and gone.
+ */
+export async function pruneAnnouncements(
+	app: PeerHubApp,
+	options: { ttlMs?: number; now?: number } = {}
+): Promise<{ expired: number }> {
+	if (!app.db) return { expired: 0 };
+
+	const ttlMs = options.ttlMs ?? ANNOUNCEMENT_TTL_MS;
+	const now = options.now ?? Date.now();
+	const connected = app.directoryRemotes ?? new Set<string>();
+
+	const rows = (await app.db
+		.find('@ghostdrive/announcements', { gte: {}, lte: {} })
+		.toArray()) as Announcement[];
+
+	const dropped = new Set<Announcement>();
+	for (const row of rows) {
+		if (connected.has(row.peerKey)) continue;
+		if (now - (Number(row.lastSeen) || 0) <= ttlMs) continue;
+		await app.db.delete('@ghostdrive/announcements', {
+			peerKey: row.peerKey,
+			repoId: row.repoId
+		});
+		dropped.add(row);
+	}
+
+	if (dropped.size === 0) return { expired: 0 };
+	await app.db.flush();
+
+	// The dropped repos belong to a peer that is gone, so any mirror of them has
+	// lost its source. Everything still listed stays live.
+	const gone = rows.filter((row) => dropped.has(row) && row.driveKey).map((row) => row.driveKey!);
+	const live = rows.filter((row) => !dropped.has(row) && row.driveKey).map((row) => row.driveKey!);
+	app.markRemovedSources(gone, live);
+
+	return { expired: dropped.size };
+}
+
 // --- wire ---
 
-function respond(app: PeerHubApp, rpc: any): void {
+function respond(app: PeerHubApp, rpc: any, remote: string): void {
 	rpc.on('error', () => {});
-	rpc.respond('announce', opts, async () => JSON.stringify(await ownAnnouncements(app)));
+	// Envelope, not a bare array: the reply is the sender's complete set, and only
+	// a reply that says *who* is speaking lets the receiver retire a repo that is
+	// no longer in it. Without that, a deleted repo only disappeared when a push
+	// happened to arrive — a peer that was offline at the time kept it forever,
+	// and every reconnect merged it back in.
+	rpc.respond('announce', opts, async () => {
+		const repos = await ownAnnouncements(app);
+		return JSON.stringify({ peerKey: selfHex(app), repos });
+	});
 	rpc.respond('push', opts, async (payload: string) => {
-		await ingestAnnouncements(app, payload);
+		await ingestAnnouncements(app, payload, remote);
 		return 'ok';
 	});
 }
 
-function requestFrom(app: PeerHubApp, rpc: any): void {
+function requestFrom(app: PeerHubApp, rpc: any, remote: string): void {
 	const ask = () => {
 		rpc
 			.request('announce', '', opts)
-			.then((payload: string) => ingestAnnouncements(app, payload))
+			.then((payload: string) => ingestAnnouncements(app, payload, remote))
 			.catch(() => {});
 	};
 	if (rpc.opened) ask();
@@ -225,7 +310,7 @@ export function attachDirectory(app: PeerHubApp, conn: any): void {
 			} catch {
 				return; // channel already exists on this socket
 			}
-			track(app, rpc);
+			track(app, rpc, remote);
 		});
 		return;
 	}
@@ -236,14 +321,26 @@ export function attachDirectory(app: PeerHubApp, conn: any): void {
 	} catch {
 		return;
 	}
-	track(app, rpc);
+	track(app, rpc, remote);
 }
 
-function track(app: PeerHubApp, rpc: any): void {
+function track(app: PeerHubApp, rpc: any, remote: string): void {
+	if (remote) {
+		rpc._remote = remote;
+		app.directoryRemotes.add(remote);
+	}
 	app.directoryPeers.add(rpc);
-	rpc.on('close', () => app.directoryPeers.delete(rpc));
-	respond(app, rpc);
-	requestFrom(app, rpc);
+	rpc.on('close', () => {
+		app.directoryPeers.delete(rpc);
+		if (!remote) return;
+		// A second connection to the same peer keeps it "connected".
+		for (const other of app.directoryPeers) {
+			if (other._remote === remote) return;
+		}
+		app.directoryRemotes.delete(remote);
+	});
+	respond(app, rpc, remote);
+	requestFrom(app, rpc, remote);
 }
 
 // Tell everyone we are connected to about our current repo list, and wait for
@@ -270,7 +367,9 @@ export async function refreshAnnouncements(app: PeerHubApp, timeoutMs = 2000): P
 	const sends = channels.map((rpc) =>
 		rpc
 			.request('announce', '', opts)
-			.then((reply: string) => ingestAnnouncements(app, reply))
+			// Attribute the reply to the channel it arrived on, not to whatever
+			// `peerKey` the payload claims: a reply may only speak for its sender.
+			.then((reply: string) => ingestAnnouncements(app, reply, rpc._remote ?? null))
 			.catch(() => {})
 	);
 	await settleWithTimeout(sends, timeoutMs);

@@ -24,6 +24,8 @@ interface Result {
 	metaKey: string | null;
 	openable: boolean;
 	mirror: boolean;
+	/** A mirror whose owner stopped announcing the repo. */
+	sourceRemoved: boolean;
 }
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -67,7 +69,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			driveKey: session.drive ? session.drive.key.toString('hex') : null,
 			metaKey: session.metaKeyHex ?? null,
 			openable: true,
-			mirror: !!session.isGuest
+			mirror: !!session.isGuest,
+			sourceRemoved: !!session.sourceRemoved
 		});
 	}
 
@@ -92,7 +95,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			driveKey: entry.driveKey,
 			metaKey: entry.metaKey,
 			openable: entry.visibility === 'public' && !!entry.driveKey,
-			mirror: false
+			mirror: false,
+			sourceRemoved: false
 		});
 	}
 
