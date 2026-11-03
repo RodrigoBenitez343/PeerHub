@@ -3,6 +3,7 @@ import Protomux from 'protomux';
 import RPC from 'protomux-rpc';
 import c from 'compact-encoding';
 import type PeerHubApp from './app.js';
+import { serve } from './shared-drive.js';
 
 // Repo discovery without a server. Every peer joins one constant swarm topic
 // (app.ts) and, on each connection, exchanges the list of repos it hosts over a
@@ -25,6 +26,8 @@ export interface Announcement {
 	defaultBranch: string;
 	driveKey: string | null; // public only
 	metaKey: string | null; // public only
+	/** Key of the drive that holds repo content; public only. */
+	contentKey: string | null;
 	// 'owner' (default) or 'peers'. Lets a guest show the right state before it
 	// connects; the RPC `policy` call is still the authoritative answer.
 	writeMode: string;
@@ -57,6 +60,7 @@ export async function ownAnnouncements(app: PeerHubApp): Promise<Announcement[]>
 			defaultBranch: repo?.defaultBranch ?? 'main',
 			driveKey: session.drive ? b4a.toString(session.drive.key, 'hex') : null,
 			metaKey: session.metaKeyHex,
+			contentKey: session.contentKeyHex,
 			writeMode: repo?.writeMode === 'peers' ? 'peers' : 'owner',
 			ts: repo?.createdAt ?? now,
 			lastSeen: now
@@ -84,6 +88,8 @@ function sanitize(app: PeerHubApp, raw: any, from: string | null = null): Announ
 	const driveKey =
 		typeof raw.driveKey === 'string' && HEX64.test(raw.driveKey) ? raw.driveKey : null;
 	const metaKey = typeof raw.metaKey === 'string' && HEX64.test(raw.metaKey) ? raw.metaKey : null;
+	const contentKey =
+		typeof raw.contentKey === 'string' && HEX64.test(raw.contentKey) ? raw.contentKey : null;
 
 	return {
 		peerKey,
@@ -95,6 +101,7 @@ function sanitize(app: PeerHubApp, raw: any, from: string | null = null): Announ
 			typeof raw.defaultBranch === 'string' && raw.defaultBranch ? raw.defaultBranch : 'main',
 		driveKey: visibility === 'public' ? driveKey : null,
 		metaKey: visibility === 'public' ? metaKey : null,
+		contentKey: visibility === 'public' ? contentKey : null,
 		writeMode: raw.writeMode === 'peers' ? 'peers' : 'owner',
 		ts: Number(raw.ts) || Date.now(),
 		lastSeen: Date.now()
@@ -104,6 +111,43 @@ function sanitize(app: PeerHubApp, raw: any, from: string | null = null): Announ
 export interface PushEnvelope {
 	peerKey?: string;
 	repos?: unknown;
+}
+
+export interface MirrorRow {
+	id: string;
+	driveKey: string | null;
+	/** Peer that announced the source; the catalogue records it as the owner. */
+	ownerKey: string | null;
+}
+
+/**
+ * Which mirrors no longer have a repo behind them.
+ *
+ * The sender lists everything it hosts, so a repo it stopped listing was
+ * deleted. Either proof is enough: the drive key it retracted (`gone`), or its
+ * current list having nothing of ours (`peerKey`). The second one is what a peer
+ * that was offline during the deletion has to rely on — by the time the owner
+ * answers again, the stale announcement row is already pruned, so nothing else
+ * ties the mirror to somebody who no longer has it.
+ */
+export function mirrorsToForget(
+	mirrors: MirrorRow[],
+	{
+		peerKey = null,
+		gone = [],
+		live = []
+	}: { peerKey?: string | null; gone?: string[]; live?: string[] } = {}
+): string[] {
+	const goneKeys = new Set(gone);
+	const liveKeys = new Set(live);
+	const forget: string[] = [];
+	for (const mirror of mirrors) {
+		if (!mirror.driveKey || liveKeys.has(mirror.driveKey)) continue;
+		if (goneKeys.has(mirror.driveKey) || (peerKey && mirror.ownerKey === peerKey)) {
+			forget.push(mirror.id);
+		}
+	}
+	return forget;
 }
 
 export async function ingestAnnouncements(
@@ -161,12 +205,17 @@ export async function ingestAnnouncements(
 		}
 	}
 
-	// A mirror of a repo the owner stopped announcing is this peer's own copy of
-	// the files, so it is not deleted — but it must stop looking like a live
-	// repo. Cleared again if the owner starts announcing it.
+	// A repo the owner deleted is deleted here too: the entry goes, so nobody
+	// keeps listing an empty mirror they can never open. The files stay on disk
+	// (they are this peer's own copy); only the repo is forgotten.
 	const keyOf = (record: Announcement) => record.driveKey;
 	const goneKeys = removed.map(keyOf).filter((key): key is string => !!key);
 	const liveKeys = accepted.map(keyOf).filter((key): key is string => !!key);
+	if (sender && sender !== selfHex(app)) {
+		await app.forgetRemovedMirrors({ peerKey: sender, gone: goneKeys, live: liveKeys });
+	}
+	// A source that merely went quiet is only marked: a peer that stopped
+	// answering has not said its repos are gone (see pruneAnnouncements).
 	if (goneKeys.length > 0 || liveKeys.length > 0) {
 		app.markRemovedSources(goneKeys, liveKeys);
 	}
@@ -267,14 +316,31 @@ function respond(app: PeerHubApp, rpc: any, remote: string): void {
 	// no longer in it. Without that, a deleted repo only disappeared when a push
 	// happened to arrive — a peer that was offline at the time kept it forever,
 	// and every reconnect merged it back in.
-	rpc.respond('announce', opts, async () => {
-		const repos = await ownAnnouncements(app);
-		return JSON.stringify({ peerKey: selfHex(app), repos });
-	});
-	rpc.respond('push', opts, async (payload: string) => {
-		await ingestAnnouncements(app, payload, remote);
-		return 'ok';
-	});
+	// Both handlers run over the DB, so either can reject. protomux-rpc cannot
+	// encode a rejected reply: it echoes the decoded request back as the message
+	// body, whose `c.raw` length is undefined, and the responder dies in
+	// `Buffer.allocUnsafe(NaN)`. Wrap them so a failure reads as an empty answer
+	// instead of taking the process down (same guard the write channel uses).
+	rpc.respond('announce', opts, () =>
+		serve(
+			'announce',
+			() => JSON.stringify({ peerKey: selfHex(app), repos: [] }),
+			async () => {
+				const repos = await ownAnnouncements(app);
+				return JSON.stringify({ peerKey: selfHex(app), repos });
+			}
+		)
+	);
+	rpc.respond('push', opts, (payload: string) =>
+		serve(
+			'push',
+			() => 'ok',
+			async () => {
+				await ingestAnnouncements(app, payload, remote);
+				return 'ok';
+			}
+		)
+	);
 }
 
 function requestFrom(app: PeerHubApp, rpc: any, remote: string): void {

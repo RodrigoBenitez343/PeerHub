@@ -22,6 +22,7 @@ interface Result {
 	branch: string;
 	driveKey: string | null;
 	metaKey: string | null;
+	contentKey: string | null;
 	openable: boolean;
 	mirror: boolean;
 	/** A mirror whose owner stopped announcing the repo. */
@@ -68,6 +69,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			branch: repo.defaultBranch,
 			driveKey: session.drive ? session.drive.key.toString('hex') : null,
 			metaKey: session.metaKeyHex ?? null,
+			contentKey: session.contentKeyHex ?? null,
 			openable: true,
 			mirror: !!session.isGuest,
 			sourceRemoved: !!session.sourceRemoved
@@ -94,6 +96,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			branch: entry.defaultBranch,
 			driveKey: entry.driveKey,
 			metaKey: entry.metaKey,
+			contentKey: entry.contentKey,
 			openable: entry.visibility === 'public' && !!entry.driveKey,
 			mirror: false,
 			sourceRemoved: false

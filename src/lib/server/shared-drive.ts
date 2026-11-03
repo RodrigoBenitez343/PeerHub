@@ -2,6 +2,9 @@ import DistributedDrive from 'distributed-drive';
 import Protomux from 'protomux';
 import RPC from 'protomux-rpc';
 import c from 'compact-encoding';
+import { isReservedRepoPath } from './paths.js';
+import type ChangeLog from './changelog.js';
+import type { ChangeEntry, ChangeOp } from './changelog.js';
 
 // SharedDrive extends distributed-drive (read-only in its stock form) with a
 // second, bidirectional protomux-rpc channel on the same encrypted socket. The
@@ -37,17 +40,51 @@ export interface SharedFile {
 	path: string;
 	size: number;
 	mtime: number | null;
+	/** Content hash recorded by the writer, when it knew one. */
+	hash?: string | null;
+	/**
+	 * Version stamp of the entry (see stampOf). Only the content drive has one: it
+	 * is what lets a peer prove the copy it holds is the version in question.
+	 */
+	stamp?: string | null;
 }
 
 export interface SharedStat {
 	exists: boolean;
 	size: number;
 	mtime: number | null;
+	hash?: string | null;
+	stamp?: string | null;
 }
 
 export interface PutResult {
 	size: number;
 	mtime: number | null;
+	hash?: string | null;
+	stamp?: string | null;
+}
+
+/**
+ * What one ask of the change log returns: either the paths that moved since the
+ * cursor, or the whole listing when the cursor cannot be served.
+ */
+export interface ChangePage {
+	/** Identity of the log that answered; a cursor only means something inside it. */
+	log: string;
+	/** Last sequence number in this page; store it and ask from there next time. */
+	head: number;
+	entries: ChangeEntry[];
+	/** True when more entries follow `head`. */
+	more: boolean;
+	/** True when `listing` is the whole shared file system instead of a diff. */
+	full: boolean;
+	listing: SharedFile[];
+}
+
+/** What the writer knows about the bytes it is about to send. */
+export interface PutOptions {
+	/** Content hash of the payload, stored with the entry for later comparison. */
+	hash?: string | null;
 }
 
 interface MountedDrive {
@@ -62,9 +99,48 @@ interface Upload {
 	ws: any;
 	error: Error | null;
 	bytes: number;
+	hash: string | null;
 }
 
-// --- wire formats ---------------------------------------------------------
+// --- wire formats ---
+
+/**
+ * A number a `uint` field can actually carry.
+ *
+ * Every numeric field on this channel is a `uint`, and compact-encoding writes a
+ * varint whose *length* it derives from the value: a `NaN` or a negative number
+ * makes the encode throw. protomux-rpc answers a response that fails to encode by
+ * sending the failed value as the message body, which throws again — uncaught,
+ * in the responder's process, as `ERR_OUT_OF_RANGE` from `Buffer.allocUnsafe`.
+ * A size read off an entry the drive has not downloaded is exactly that kind of
+ * value, so it is clamped here instead of killing the peer that served it.
+ *
+ * Exported for the wire-shape tests: nothing else should need it.
+ */
+export function count(value: unknown): number {
+	const n = Number(value);
+	if (!Number.isFinite(n) || n <= 0) return 0;
+	return n > Number.MAX_SAFE_INTEGER ? Number.MAX_SAFE_INTEGER : Math.round(n);
+}
+
+/**
+ * Run a responder so that it cannot reject.
+ *
+ * A handler that throws leaves protomux-rpc encoding the *request* value as if
+ * it were the response — a string where a struct belongs — which throws again
+ * outside any catch and takes the process with it. The fallback is the shape the
+ * caller expects, so a failure reads like an empty answer, never a crash.
+ *
+ * Exported for the wire-shape tests: nothing else should need it.
+ */
+export function serve<T>(label: string, fallback: () => T, run: () => Promise<T> | T): Promise<T> {
+	return Promise.resolve()
+		.then(run)
+		.catch((err: any) => {
+			console.warn(`[shared-drive] rpc ${label} failed:`, err?.message ?? err);
+			return fallback();
+		});
+}
 
 function struct(fields: Array<[string, any]>) {
 	return {
@@ -85,19 +161,25 @@ function struct(fields: Array<[string, any]>) {
 const ManifestEntry = struct([
 	['path', c.string],
 	['size', c.uint],
-	['mtime', c.uint]
+	['mtime', c.uint],
+	['hash', c.string],
+	['stamp', c.string]
 ]);
 const ManifestResponse = struct([['entries', c.array(c.frame(ManifestEntry))]]);
 const StatResponse = struct([
 	['exists', c.uint],
 	['size', c.uint],
-	['mtime', c.uint]
+	['mtime', c.uint],
+	['hash', c.string],
+	['stamp', c.string]
 ]);
 const OkResponse = struct([
 	['ok', c.uint],
 	['error', c.string],
 	['size', c.uint],
-	['mtime', c.uint]
+	['mtime', c.uint],
+	['hash', c.string],
+	['stamp', c.string]
 ]);
 const RangeRequest = struct([
 	['path', c.string],
@@ -106,7 +188,31 @@ const RangeRequest = struct([
 ]);
 const PutBeginRequest = struct([
 	['id', c.string],
-	['path', c.string]
+	['path', c.string],
+	['hash', c.string]
+]);
+const ChangeEntryWire = struct([
+	['seq', c.uint],
+	['op', c.uint],
+	['path', c.string],
+	['size', c.uint],
+	['mtime', c.uint],
+	['hash', c.string],
+	['stamp', c.string]
+]);
+// Either a page of the log, or the whole listing when the cursor cannot be
+// served. Both in one answer keeps a sync at one round trip either way.
+const ChangesResponse = struct([
+	['log', c.string],
+	['head', c.uint],
+	['more', c.uint],
+	['full', c.uint],
+	['entries', c.array(c.frame(ChangeEntryWire))],
+	['listing', c.array(c.frame(ManifestEntry))]
+]);
+const ChangesRequest = struct([
+	['since', c.uint],
+	['log', c.string]
 ]);
 const PutChunkRequest = struct([
 	['id', c.string],
@@ -133,6 +239,7 @@ const putChunkOpts = { requestEncoding: PutChunkRequest, responseEncoding: OkRes
 const putEndOpts = { requestEncoding: PutEndRequest, responseEncoding: OkResponse };
 const metaPutOpts = { requestEncoding: MetaPutRequest, responseEncoding: OkResponse };
 const policyOpts = { requestEncoding: c.uint, responseEncoding: PolicyResponse };
+const changesOpts = { requestEncoding: ChangesRequest, responseEncoding: ChangesResponse };
 
 // --- path helpers (mirror distributed-drive's mount rules) ----------------
 
@@ -161,12 +268,92 @@ function listBase(prefix: string, mount: string): string | null {
 	return null;
 }
 
-function ok(size = 0, mtime: number | null = null) {
-	return { ok: 1, error: '', size, mtime: mtime && mtime > 0 ? Math.round(mtime) : 0 };
+function ok(
+	size = 0,
+	mtime: number | null = null,
+	hash: string | null = null,
+	stamp: string | null = null
+) {
+	return {
+		ok: 1,
+		error: '',
+		size: count(size),
+		mtime: mtime && mtime > 0 ? Math.round(mtime) : 0,
+		hash: hash ?? '',
+		stamp: stamp ?? ''
+	};
 }
 
 function fail(err: any) {
-	return { ok: 0, error: err?.message ?? String(err), size: 0, mtime: 0 };
+	return { ok: 0, error: err?.message ?? String(err), size: 0, mtime: 0, hash: '', stamp: '' };
+}
+
+/** A changelog answer with nothing in it, for a handler that could not run. */
+function emptyChanges() {
+	return { log: '', head: 0, more: 0, full: 0, entries: [], listing: [] };
+}
+
+// Hyperdrive stores no mtime of its own, so the writer records the wall clock and
+// the content hash as entry metadata. That metadata is what a manifest reports —
+// it travels with the entry, so a reader never has to ask for the bytes to learn
+// whether they moved.
+interface EntryMeta {
+	mtime: number | null;
+	hash: string | null;
+}
+
+/**
+ * Read the metadata a writer stored with an entry.
+ *
+ * A Hyperdrive keeps its file table as JSON, so the Buffer written into it comes
+ * back as `{ type: 'Buffer', data: [...] }` rather than as bytes — both shapes are
+ * accepted here, along with a plain object for drives that keep one.
+ */
+export function decodeEntryMeta(raw: any): EntryMeta {
+	if (!raw) return { mtime: null, hash: null };
+
+	let parsed: any = null;
+	try {
+		if (typeof raw === 'string') parsed = JSON.parse(raw);
+		else if (typeof raw.byteLength === 'number')
+			parsed = JSON.parse(Buffer.from(raw).toString('utf-8'));
+		else if (Array.isArray(raw.data)) parsed = JSON.parse(Buffer.from(raw.data).toString('utf-8'));
+		else if (typeof raw === 'object') parsed = raw;
+	} catch {
+		return { mtime: null, hash: null };
+	}
+
+	return {
+		mtime: typeof parsed?.mtime === 'number' ? parsed.mtime : null,
+		hash: typeof parsed?.hash === 'string' && parsed.hash ? parsed.hash : null
+	};
+}
+
+/** Metadata for a write; null when there is nothing worth storing. */
+export function encodeEntryMeta(meta: EntryMeta): Buffer | null {
+	if (meta.mtime == null && !meta.hash) return null;
+	return Buffer.from(JSON.stringify({ mtime: meta.mtime, hash: meta.hash }));
+}
+
+function readMeta(entry: any): EntryMeta {
+	return decodeEntryMeta(entry?.value?.metadata);
+}
+
+/**
+ * Version stamp of a drive entry.
+ *
+ * A Hyperdrive has no mtime and no version number, but every write allocates its
+ * own place in the data core and the entry records it. Those four numbers can
+ * only come from the same write, so a peer that holds an entry with the same
+ * stamp holds exactly this version — proof it can check without hashing a
+ * single byte, which is what lets a large file travel as blocks instead of
+ * through a request per file.
+ */
+export function stampOf(blob: any): string | null {
+	if (!blob || typeof blob.blockOffset !== 'number' || typeof blob.blockLength !== 'number') {
+		return null;
+	}
+	return `${blob.blockOffset}:${blob.blockLength}:${blob.byteOffset ?? 0}:${blob.byteLength ?? 0}`;
 }
 
 function concat(chunks: Buf[]): Buffer {
@@ -233,16 +420,56 @@ function drained(ws: any): Promise<void> {
 	});
 }
 
+/**
+ * `entry.value` in the shape distributed-drive can put on the wire.
+ *
+ * Its `entry-value` schema encodes `metadata` with `c.buffer`, and a Hyperdrive
+ * hands metadata back as the JSON shape of a Buffer — `{ type: 'Buffer', data }`,
+ * a plain object, so `byteLength` is undefined. compact-encoding turns that into
+ * a NaN size and the responder dies in `Buffer.allocUnsafe(NaN)`, in the main
+ * process, right after the peer that asked for the entry loses its request.
+ *
+ * Every file this app's sync wrote carries that metadata, so *any* `entry` or
+ * `list` answered from the content drive could do it. The rest of the value is
+ * left exactly as the drive returned it.
+ */
+export function wireEntryValue(value: any): any {
+	if (!value || typeof value !== 'object') return value;
+	return { ...value, metadata: asBinary(value.metadata) };
+}
+
+function asBinary(value: any): Buffer | null {
+	if (!value) return null;
+	if (Buffer.isBuffer(value)) return value;
+	if (value instanceof Uint8Array)
+		return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+	// The JSON shape a Hyperdrive stores metadata in.
+	if (Array.isArray(value.data)) return Buffer.from(value.data);
+	if (typeof value === 'string') return Buffer.from(value, 'utf-8');
+	// Nothing is dropped: an unexpected shape travels as the JSON bytes it already
+	// is, which the reader parses straight back (see decodeEntryMeta).
+	return Buffer.from(JSON.stringify(value));
+}
+
 // --- drive ----------------------------------------------------------------
 
 export default class SharedDrive extends DistributedDrive {
+	// The corestore session this drive was opened from. distributed-drive keeps it
+	// but does not declare it; content cores replicate through it.
+	readonly store: any;
 	cache: DriveLike | null = null;
 	shared: DriveLike | null = null;
+	// The repo's own Hyperdrive: content lives here so peers replicate blocks
+	// instead of asking this process for whole files. Writable on the owner only.
+	content: DriveLike | null = null;
 	// Set by the host session: applies a repo metadata record to the writable
 	// metadata core on behalf of a guest.
 	onMetaWrite: ((collection: string, doc: unknown) => Promise<void>) | null = null;
 	// Same, for deletes (branch removal).
 	onMetaDelete: ((collection: string, key: unknown) => Promise<void>) | null = null;
+	// Host only: the append-only record of what changed in the shared file system.
+	// Guests ask the host for it over the same channel they already use.
+	changeLog: ChangeLog | null = null;
 
 	// Repo write policy, owned by the host. Default is one-way: the owner writes,
 	// every other peer replicates. A guest mirrors this value (see
@@ -255,13 +482,17 @@ export default class SharedDrive extends DistributedDrive {
 	private _writeRpc: any = null;
 	private _writeOpening: Promise<any> | null = null;
 	private _uploadSeq = 0;
+	private _replicated = new WeakSet<object>();
 
 	constructor(store: any, opts: any = {}) {
 		super(store, opts);
+		this.store = store;
 		this.cache = opts.cache ?? null;
 		this.shared = opts.shared ?? null;
+		this.content = opts.content ?? null;
 		this.onMetaWrite = opts.onMetaWrite ?? null;
 		this.onMetaDelete = opts.onMetaDelete ?? null;
+		this.changeLog = opts.changelog ?? null;
 	}
 
 	// True when this peer serves the files (it created the session) instead of
@@ -335,7 +566,23 @@ export default class SharedDrive extends DistributedDrive {
 		await BaseDrive.prototype._open.call(this);
 
 		const server = (this as any).server;
-		if (server) server.on('connection', (socket: any) => this._acceptWrites(socket));
+		if (server) {
+			server.on('connection', (socket: any) => {
+				// Content is a Hyperdrive now, so its cores go over this very socket: the
+				// peer pulls the blocks it asks for instead of a file per round trip.
+				this._replicate(socket);
+				this._acceptWrites(socket);
+			});
+			return;
+		}
+
+		// Guest: the same socket that carries the RPC channel also carries the
+		// replication stream for the content drive.
+		const rpc = (this as any)._rpc;
+		if (rpc) {
+			if (rpc.opened) this._replicate(rpc.stream);
+			else rpc.on('open', () => this._replicate(rpc.stream));
+		}
 	}
 
 	protected async _close(): Promise<void> {
@@ -358,6 +605,56 @@ export default class SharedDrive extends DistributedDrive {
 	}
 
 	// --- shared namespace API (same behaviour on host and guest) ---
+	//
+	// The stock answers first: distributed-drive answers `entry`, `get`, `list` and
+	// `readdir` itself, and every one of those handlers re-raises a RangeError or
+	// TypeError instead of skipping the drive that produced it (`safetyCatch` does
+	// that on purpose). A throw there is fatal on this channel: protomux-rpc answers
+	// a failed handler by echoing the *decoded request* as the message body, which
+	// cannot be encoded (its size becomes NaN, `Buffer.allocUnsafe(NaN)`), and that
+	// throw lands in the main process as "A JavaScript error occurred".
+	//
+	// So these overrides own the answers. Each one does what its stock handler
+	// means to do — skip the drive that failed and report the caller's "nothing
+	// here" shape — and each value handed back is one the encoding can carry.
+	// `_onEntry`/`_onList` also normalize `entry.value` (see `wireEntryValue`),
+	// because a Hyperdrive's metadata is not the Buffer the entry-value encoding
+	// expects. `read` is already answered by this class (see `_onRead`).
+	protected async _onEntry(entryPath: string): Promise<any> {
+		try {
+			const answer = await (BaseDrive.prototype as any)._onEntry.call(this, entryPath);
+			if (answer?.entry?.value) answer.entry.value = wireEntryValue(answer.entry.value);
+			return answer;
+		} catch {
+			return { exists: false, entry: null };
+		}
+	}
+
+	protected async _onList(prefix: string): Promise<any> {
+		try {
+			const answer = await (BaseDrive.prototype as any)._onList.call(this, prefix);
+			for (const entry of answer?.entries ?? []) entry.value = wireEntryValue(entry.value);
+			return answer;
+		} catch {
+			return { entries: [] };
+		}
+	}
+
+	protected async _onGet(filePath: string): Promise<any> {
+		try {
+			return await (BaseDrive.prototype as any)._onGet.call(this, filePath);
+		} catch {
+			return EMPTY;
+		}
+	}
+
+	protected async _onReaddir(prefix: string): Promise<any> {
+		try {
+			return await (BaseDrive.prototype as any)._onReaddir.call(this, prefix);
+		} catch {
+			return { names: [] };
+		}
+	}
 
 	async manifestShared(prefix = '/'): Promise<SharedFile[]> {
 		if (this.isHost) return this._localManifest(prefix);
@@ -367,21 +664,67 @@ export default class SharedDrive extends DistributedDrive {
 		return (res.entries as any[]).map((entry) => ({
 			path: entry.path,
 			size: entry.size,
-			mtime: entry.mtime || null
+			mtime: entry.mtime || null,
+			hash: entry.hash || null,
+			stamp: entry.stamp || null
 		}));
+	}
+
+	/**
+	 * What moved since `cursor`.
+	 *
+	 * The answer is either a page of the change log or, when this peer cannot
+	 * answer for the cursor, the whole listing — one round trip either way, so a
+	 * sync never has to guess whether a diff is available.
+	 */
+	async changesSince(cursor: number, logId?: string | null): Promise<ChangePage> {
+		const since = Math.max(0, Math.round(cursor || 0));
+
+		if (this.isHost) return this._localChanges(since, logId ?? '');
+
+		const rpc = await this._writeChannel();
+		const res = await rpc.request('changelog', { since, log: logId ?? '' }, changesOpts);
+		return {
+			log: res.log,
+			head: res.head,
+			more: !!res.more,
+			full: !!res.full,
+			entries: (res.entries as any[]).map((entry) => ({
+				seq: entry.seq,
+				op: entry.op === 1 ? 'del' : 'put',
+				path: entry.path,
+				size: entry.size,
+				mtime: entry.mtime || null,
+				hash: entry.hash || null,
+				stamp: entry.stamp || null
+			})),
+			listing: (res.listing as any[]).map((entry) => ({
+				path: entry.path,
+				size: entry.size,
+				mtime: entry.mtime || null,
+				hash: entry.hash || null,
+				stamp: entry.stamp || null
+			}))
+		};
 	}
 
 	async statShared(path: string): Promise<SharedStat> {
 		path = normalizePath(path);
 		if (this.isHost) {
 			const hit = await this._findShared(path);
-			if (!hit) return { exists: false, size: 0, mtime: null };
+			if (!hit) return { exists: false, size: 0, mtime: null, hash: null, stamp: null };
 			return { exists: true, ...(await this._statOf(hit.drive, hit.key)) };
 		}
 
 		const rpc = await this._writeChannel();
 		const res = await rpc.request('stat', path, statOpts);
-		return { exists: !!res.exists, size: res.size, mtime: res.mtime || null };
+		return {
+			exists: !!res.exists,
+			size: res.size,
+			mtime: res.mtime || null,
+			hash: res.hash || null,
+			stamp: res.stamp || null
+		};
 	}
 
 	// Yields the file contents from the shared namespace only — never from the
@@ -412,20 +755,57 @@ export default class SharedDrive extends DistributedDrive {
 		}
 	}
 
-	async putShared(path: string, source: AsyncIterable<Buf>): Promise<PutResult> {
+	// A peer reads from its own copy of the content drive when that copy holds the
+	// exact version the caller was told about. The stamp is what proves it (see
+	// stampOf), so a large file travels as replicated blocks instead of a request
+	// per chunk; a replica that lagged behind by one write fails the comparison and
+	// the host is asked, because stale bytes recorded as current would be worse
+	// than slow bytes.
+	async *readSharedVersion(path: string, stamp: string | null | undefined): AsyncGenerator<Buffer> {
+		path = normalizePath(path);
+
+		if (!this.isHost && stamp && this.content) {
+			const entry = await this.content.entry(path).catch(() => null);
+			if (entry?.value?.blob && stampOf(entry.value.blob) === stamp) {
+				for await (const chunk of this.content.createReadStream(path)) yield toBuffer(chunk);
+				return;
+			}
+		}
+
+		yield* this.readShared(path);
+	}
+
+	async putShared(
+		path: string,
+		source: AsyncIterable<Buf>,
+		options: PutOptions = {}
+	): Promise<PutResult> {
 		path = normalizePath(path);
 
 		if (this.isHost) {
 			const target = await this._routeWrite(path);
-			await this._writeStream(target.drive, target.key, source);
+			await this._writeStream(target.drive, target.key, source, {
+				mtime: Date.now(),
+				hash: options.hash ?? null
+			});
 			const stat = await this._statOf(target.drive, target.key);
-			return { size: stat.size, mtime: stat.mtime };
+			this._log('put', path, stat);
+			return {
+				size: stat.size,
+				mtime: stat.mtime,
+				hash: stat.hash ?? null,
+				stamp: stat.stamp ?? null
+			};
 		}
 
 		const rpc = await this._writeChannel();
 		const id = `${Date.now().toString(36)}-${++this._uploadSeq}`;
 
-		const begin = await rpc.request('put-begin', { id, path }, putBeginOpts);
+		const begin = await rpc.request(
+			'put-begin',
+			{ id, path, hash: options.hash ?? '' },
+			putBeginOpts
+		);
 		if (!begin.ok) throw new Error(begin.error || 'Could not start upload');
 
 		try {
@@ -440,7 +820,12 @@ export default class SharedDrive extends DistributedDrive {
 
 		const end = await rpc.request('put-end', { id }, putEndOpts);
 		if (!end.ok) throw new Error(end.error || 'Upload failed');
-		return { size: end.size, mtime: end.mtime || null };
+		return {
+			size: end.size,
+			mtime: end.mtime || null,
+			hash: end.hash || null,
+			stamp: end.stamp || null
+		};
 	}
 
 	async putMetaRemote(collection: string, doc: unknown): Promise<void> {
@@ -474,6 +859,7 @@ export default class SharedDrive extends DistributedDrive {
 			const target = await this._routeDelete(path);
 			if (!target) return;
 			await target.drive.del(target.key);
+			this._log('del', path);
 			return;
 		}
 
@@ -483,6 +869,22 @@ export default class SharedDrive extends DistributedDrive {
 	}
 
 	// --- local (host) side ---
+
+	// One host write, recorded for the peers that ask for a diff later.
+	private _log(
+		op: ChangeOp,
+		path: string,
+		stat?: { size: number; mtime: number | null; hash: string | null; stamp: string | null } | null
+	): void {
+		this.changeLog?.append({
+			op,
+			path,
+			size: stat?.size ?? 0,
+			mtime: stat?.mtime ?? null,
+			hash: stat?.hash ?? null,
+			stamp: stat?.stamp ?? null
+		});
+	}
 
 	private _mounted(): MountedDrive[] {
 		const mounts = (this as any)._mounts as Map<DriveLike, string> | undefined;
@@ -508,6 +910,9 @@ export default class SharedDrive extends DistributedDrive {
 			if (entry) return { drive, key };
 		}
 
+		// New paths land in the repo's content drive, where they replicate as blocks;
+		// the old shared folder stays as a fallback for repos mid-migration.
+		if (this.content && this._writable(this.content)) return { drive: this.content, key: path };
 		if (this.shared) return { drive: this.shared, key: path };
 		if (fallback) return fallback;
 		throw new Error('No writable drive in this session');
@@ -538,18 +943,36 @@ export default class SharedDrive extends DistributedDrive {
 	private async _statOf(
 		drive: DriveLike,
 		key: string
-	): Promise<{ size: number; mtime: number | null }> {
+	): Promise<{ size: number; mtime: number | null; hash: string | null; stamp: string | null }> {
 		const entry = await drive.entry(key).catch(() => null);
-		if (!entry) return { size: 0, mtime: null };
+		if (!entry) return { size: 0, mtime: null, hash: null, stamp: null };
+		const meta = readMeta(entry);
 		return {
 			size: entry.value?.blob?.byteLength ?? 0,
-			mtime: typeof entry.mtime === 'number' ? entry.mtime : null
+			// A drive that stamps its own mtime wins; a Hyperdrive has none, so the
+			// metadata written with the entry is the record of when it changed.
+			mtime: typeof entry.mtime === 'number' ? entry.mtime : meta.mtime,
+			hash: meta.hash,
+			stamp: this._stampOfEntry(drive, entry)
 		};
+	}
+
+	// Only the content drive is replicated to peers, so only it can prove a
+	// replica's version. A mounted folder's blob numbers mean nothing (a plain
+	// folder reports zeros), and publishing them would invite a false match.
+	private _stampOfEntry(drive: DriveLike, entry: any): string | null {
+		if (drive !== this.content) return null;
+		return stampOf(entry?.value?.blob);
 	}
 
 	private async _localManifest(prefix: string): Promise<SharedFile[]> {
 		prefix = normalizePath(prefix);
 		const out = new Map<string, SharedFile>();
+		// `/.peerhub` is the repo's own bookkeeping (history, chunk store) and grows
+		// with every commit. A root listing never carries it: every consumer filters
+		// it out anyway, and putting it on the wire makes each manifest cost more the
+		// longer the history gets.
+		const skipReserved = prefix === '/';
 
 		for (const { drive, mount } of this._mounted()) {
 			if (drive === this.cache) continue;
@@ -561,11 +984,15 @@ export default class SharedDrive extends DistributedDrive {
 					if (!entry?.key) continue;
 					if (entry.value?.linkname) continue; // symlinks can't be recreated remotely
 					const path = toMounted(entry.key, mount);
+					if (skipReserved && isReservedRepoPath(path)) continue;
 					if (out.has(path)) continue;
+					const meta = readMeta(entry);
 					out.set(path, {
 						path,
 						size: entry.value?.blob?.byteLength ?? 0,
-						mtime: typeof entry.mtime === 'number' ? entry.mtime : null
+						mtime: typeof entry.mtime === 'number' ? entry.mtime : meta.mtime,
+						hash: meta.hash,
+						stamp: this._stampOfEntry(drive, entry)
 					});
 				}
 			} catch {
@@ -600,12 +1027,31 @@ export default class SharedDrive extends DistributedDrive {
 	private async _writeStream(
 		drive: DriveLike,
 		key: string,
-		source: AsyncIterable<Buf>
+		source: AsyncIterable<Buf>,
+		meta?: EntryMeta
 	): Promise<void> {
-		await writeIntoStream(drive.createWriteStream(key), source);
+		// Only a drive that stores metadata gets one; a plain folder has nowhere to
+		// put it and falls back to its own stat.
+		const encoded = meta ? encodeEntryMeta(meta) : null;
+		const opts = encoded && drive.supportsMetadata === true ? { metadata: encoded } : {};
+		await writeIntoStream(drive.createWriteStream(key, opts), source);
 	}
 
 	// --- RPC server side (host) ---
+
+	// Attach corestore replication to a socket once. A second attach on the same
+	// stream throws inside corestore, so the socket is remembered.
+	private _replicate(socket: any): void {
+		if (!socket || this._replicated.has(socket)) return;
+		this._replicated.add(socket);
+		try {
+			this.store.replicate(socket);
+		} catch (err: any) {
+			// Replication is how content travels now; a socket that cannot carry it
+			// still answers RPC reads, so say what happened instead of pretending.
+			console.warn('content replication not attached on this connection:', err?.message ?? err);
+		}
+	}
 
 	private _acceptWrites(socket: any): void {
 		let mux: any;
@@ -629,18 +1075,141 @@ export default class SharedDrive extends DistributedDrive {
 			rpc.on('close', () => this._writeRpcs.delete(rpc));
 			rpc.on('error', () => {});
 
-			rpc.respond('manifest', manifestOpts, (prefix: string) => this._onManifest(prefix));
-			rpc.respond('stat', statOpts, (path: string) => this._onStat(path));
-			rpc.respond('read', rangeOpts, (req: any) => this._onRead(req));
-			rpc.respond('put-begin', putBeginOpts, (req: any) => this._onPutBegin(req));
-			rpc.respond('put-chunk', putChunkOpts, (req: any) => this._onPutChunk(req));
-			rpc.respond('put-end', putEndOpts, (req: any) => this._onPutEnd(req));
-			rpc.respond('put-abort', putEndOpts, (req: any) => this._onPutAbort(req));
-			rpc.respond('meta-put', metaPutOpts, (req: any) => this._onMetaPut(req));
-			rpc.respond('meta-del', metaPutOpts, (req: any) => this._onMetaDelete(req));
-			rpc.respond('del', delOpts, (path: string) => this._onDelete(path));
+			// Every handler is wrapped: a rejection must come back as an empty
+			// answer, because protomux-rpc cannot encode one and dies trying.
+			rpc.respond('manifest', manifestOpts, (prefix: string) =>
+				serve(
+					'manifest',
+					() => ({ entries: [] }),
+					() => this._onManifest(prefix)
+				)
+			);
+			rpc.respond('stat', statOpts, (path: string) =>
+				serve(
+					'stat',
+					() => ({ exists: 0, size: 0, mtime: 0, hash: '', stamp: '' }),
+					() => this._onStat(path)
+				)
+			);
+			rpc.respond('read', rangeOpts, (req: any) =>
+				serve(
+					'read',
+					() => EMPTY,
+					() => this._onRead(req)
+				)
+			);
+			rpc.respond('put-begin', putBeginOpts, (req: any) =>
+				serve(
+					'put-begin',
+					() => fail(new Error('Upload refused')),
+					() => this._onPutBegin(req)
+				)
+			);
+			rpc.respond('put-chunk', putChunkOpts, (req: any) =>
+				serve(
+					'put-chunk',
+					() => fail(new Error('Upload refused')),
+					() => this._onPutChunk(req)
+				)
+			);
+			rpc.respond('put-end', putEndOpts, (req: any) =>
+				serve(
+					'put-end',
+					() => fail(new Error('Upload refused')),
+					() => this._onPutEnd(req)
+				)
+			);
+			rpc.respond('put-abort', putEndOpts, (req: any) =>
+				serve(
+					'put-abort',
+					() => fail(new Error('No upload to abort')),
+					() => this._onPutAbort(req)
+				)
+			);
+			rpc.respond('meta-put', metaPutOpts, (req: any) =>
+				serve(
+					'meta-put',
+					() => fail(new Error('Write refused')),
+					() => this._onMetaPut(req)
+				)
+			);
+			rpc.respond('meta-del', metaPutOpts, (req: any) =>
+				serve(
+					'meta-del',
+					() => fail(new Error('Write refused')),
+					() => this._onMetaDelete(req)
+				)
+			);
+			rpc.respond('del', delOpts, (path: string) =>
+				serve(
+					'del',
+					() => fail(new Error('Delete refused')),
+					() => this._onDelete(path)
+				)
+			);
 			rpc.respond('policy', policyOpts, () => ({ peerWrites: this.peerWrites ? 1 : 0 }));
+			rpc.respond('changelog', changesOpts, (req: any) =>
+				serve(
+					'changelog',
+					() => emptyChanges(),
+					() => this._onChanges(req)
+				)
+			);
 		});
+	}
+
+	private async _onChanges({ since, log }: { since: number; log: string }) {
+		const page = await this._localChanges(Math.max(0, Math.round(since) || 0), log ?? '');
+		return {
+			log: page.log,
+			head: count(page.head),
+			more: page.more ? 1 : 0,
+			full: page.full ? 1 : 0,
+			entries: page.entries.map((entry) => ({
+				seq: count(entry.seq),
+				op: entry.op === 'del' ? 1 : 0,
+				path: entry.path,
+				size: count(entry.size),
+				mtime: count(entry.mtime),
+				hash: entry.hash ?? '',
+				stamp: entry.stamp ?? ''
+			})),
+			listing: page.listing.map((file) => ({
+				path: file.path,
+				size: count(file.size),
+				mtime: count(file.mtime),
+				hash: file.hash ?? '',
+				stamp: file.stamp ?? ''
+			}))
+		};
+	}
+
+	// The answer both a local sync and the RPC handler hand out.
+	private async _localChanges(since: number, logId: string): Promise<ChangePage> {
+		// The head is read *before* the listing: a write that lands while the drive
+		// is being walked is then replayed next run instead of being skipped.
+		const head = this.changeLog?.head ?? 0;
+		const log = this.changeLog?.id ?? '';
+		const page = since > 0 ? (this.changeLog?.window(since, logId) ?? null) : null;
+		if (page) {
+			return {
+				log,
+				head: page.head,
+				more: page.more,
+				full: false,
+				entries: page.entries,
+				listing: []
+			};
+		}
+
+		return {
+			log,
+			head,
+			more: false,
+			full: true,
+			entries: [],
+			listing: await this._localManifest('/')
+		};
 	}
 
 	private async _onManifest(prefix: string) {
@@ -648,20 +1217,24 @@ export default class SharedDrive extends DistributedDrive {
 		return {
 			entries: files.map((file) => ({
 				path: file.path,
-				size: file.size,
-				mtime: file.mtime && file.mtime > 0 ? Math.round(file.mtime) : 0
+				size: count(file.size),
+				mtime: count(file.mtime),
+				hash: file.hash ?? '',
+				stamp: file.stamp ?? ''
 			}))
 		};
 	}
 
 	private async _onStat(path: string) {
 		const hit = await this._findShared(normalizePath(path));
-		if (!hit) return { exists: 0, size: 0, mtime: 0 };
+		if (!hit) return { exists: 0, size: 0, mtime: 0, hash: '', stamp: '' };
 		const stat = await this._statOf(hit.drive, hit.key);
 		return {
 			exists: 1,
-			size: stat.size,
-			mtime: stat.mtime && stat.mtime > 0 ? Math.round(stat.mtime) : 0
+			size: count(stat.size),
+			mtime: count(stat.mtime),
+			hash: stat.hash ?? '',
+			stamp: stat.stamp ?? ''
 		};
 	}
 
@@ -673,18 +1246,21 @@ export default class SharedDrive extends DistributedDrive {
 		}
 	}
 
-	private async _onPutBegin({ id, path }: { id: string; path: string }) {
+	private async _onPutBegin({ id, path, hash }: { id: string; path: string; hash?: string }) {
 		try {
 			if (!this.peerWrites) return fail(new Error(READ_ONLY_MESSAGE));
 			const normalized = normalizePath(path);
 			const target = await this._routeWrite(normalized);
+			const encoded = encodeEntryMeta({ mtime: Date.now(), hash: hash ? hash : null });
+			const opts = encoded && target.drive.supportsMetadata === true ? { metadata: encoded } : {};
 			const upload: Upload = {
 				drive: target.drive,
 				key: target.key,
 				path: normalized,
-				ws: target.drive.createWriteStream(target.key),
+				ws: target.drive.createWriteStream(target.key, opts),
 				error: null,
-				bytes: 0
+				bytes: 0,
+				hash: hash ? hash : null
 			};
 			upload.ws.on('error', (err: Error) => {
 				upload.error = err;
@@ -718,10 +1294,12 @@ export default class SharedDrive extends DistributedDrive {
 			await endStream(upload.ws);
 			if (upload.error) throw upload.error;
 			const stat = await this._statOf(upload.drive, upload.key);
+			// A peer's write is a repo write: it goes into the log like its own.
+			this._log('put', upload.path, stat);
 			// Typed event surface of distributed-drive stops at `on`, so announce
 			// peer-driven changes through the EventEmitter it actually extends.
 			(this as any).emit('changed', upload.path);
-			return ok(stat.size, stat.mtime);
+			return ok(stat.size, stat.mtime, stat.hash ?? null, stat.stamp ?? null);
 		} catch (err) {
 			return fail(err);
 		}
@@ -781,6 +1359,7 @@ export default class SharedDrive extends DistributedDrive {
 			const target = await this._routeDelete(normalized);
 			if (!target) return ok();
 			await target.drive.del(target.key);
+			this._log('del', normalized);
 			(this as any).emit('changed', normalized);
 			return ok();
 		} catch (err) {

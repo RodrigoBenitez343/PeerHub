@@ -144,6 +144,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		readme,
 		peers: session.peerCount,
 		driveKey: session.drive ? b4a.toString(session.drive.key, 'hex') : null,
+		contentKey: session.contentKeyHex,
 		canCommit: session.canWrite,
 		metaShared: session.metaShared,
 		metaWritable: session.metaWritable

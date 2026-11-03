@@ -22,7 +22,9 @@ export type IconName =
 	| 'chevron-right'
 	| 'arrow-right'
 	| 'link'
-	| 'upload';
+	| 'upload'
+	| 'download'
+	| 'tag';
 
 export const ICONS: Record<IconName, string> = {
 	home: '<path d="M3 11 12 3l9 8"/><path d="M5.5 9.5V21h13V9.5"/><path d="M10 21v-6h4v6"/>',
@@ -50,5 +52,8 @@ export const ICONS: Record<IconName, string> = {
 	'arrow-right': '<path d="M4 12h15"/><path d="M13 6l6 6-6 6"/>',
 	link: '<path d="M10 13.5a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7L11.5 6"/><path d="M14 10.5a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7L12.5 18"/>',
 	upload:
-		'<path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>'
+		'<path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>',
+	download:
+		'<path d="M12 4v12"/><path d="M7 11l5 5 5-5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>',
+	tag: '<path d="M20.5 13.4 13.4 20.5a2 2 0 0 1-2.8 0L3.5 13.3V4.5a1 1 0 0 1 1-1h8.8l7.2 7.1a2 2 0 0 1 0 2.8z"/><circle cx="8.3" cy="8.3" r="1.4"/>'
 };

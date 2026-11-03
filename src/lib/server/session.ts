@@ -14,6 +14,8 @@ import SessionSync, {
 	type SyncSummary,
 	type SyncProgressFn
 } from './sync.js';
+import { migrateLegacyShared } from './content.js';
+import ChangeLog from './changelog.js';
 import { invalidateEntries } from './loaders.js';
 import { updateRepo } from './repos.js';
 import { broadcastAnnouncements } from './directory.js';
@@ -29,6 +31,7 @@ interface DriveSessionOptions {
 	icon?: Buf;
 	key?: Buf | null;
 	metaKey?: string | null;
+	contentKey?: string | null;
 }
 
 export interface DriveListEntry {
@@ -75,9 +78,15 @@ export default class DriveSession extends ReadyResource {
 	icon: Buf;
 	private _remoteKey: Buf | null;
 	private _remoteMetaKey: string | null;
+	private _remoteContentKey: string | null;
 	drive: SharedDrive | null;
 	cache: Localdrive | null;
 	shared: Localdrive | null;
+	/** The repo's content Hyperdrive; null for a guest whose invite has no key. */
+	content: Hyperdrive | null;
+	// Owner only: what changed in the shared file system, in order. A sync asks
+	// for "everything after N" instead of listing the repo end to end.
+	changeLog: ChangeLog | null;
 	sharedPath: string;
 	sync: SessionSync | null;
 	private driveMap: Map<string, Localdrive | Hyperdrive>;
@@ -92,12 +101,12 @@ export default class DriveSession extends ReadyResource {
 	// True when this core is the repo's shared one. A guest joined before the
 	// meta key existed gets false: its own local core, never shared.
 	metaShared: boolean;
-	// Guest side: the owner no longer announces this repo, so its source is gone.
-	// The local copy is kept; it just stops counting as a live repo (app.ts
-	// markRemovedSources). Re-derived from the directory on every exchange.
+	// Guest side: the peer hosting this repo went quiet (not deleted — a deletion
+	// forgets the mirror outright). The local copy is kept; it just stops counting
+	// as a live repo (app.ts markRemovedSources). Re-derived on every exchange.
 	sourceRemoved = false;
 
-	constructor({ app, id, name, icon, key, metaKey }: DriveSessionOptions) {
+	constructor({ app, id, name, icon, key, metaKey, contentKey }: DriveSessionOptions) {
 		super();
 		this.app = app;
 		this.id = id;
@@ -105,9 +114,14 @@ export default class DriveSession extends ReadyResource {
 		this.icon = icon ?? b4a.alloc(0);
 		this._remoteKey = key ?? null;
 		this._remoteMetaKey = metaKey ?? null;
+		this._remoteContentKey = contentKey ?? null;
 		this.drive = null;
 		this.cache = null;
 		this.shared = null;
+		this.content = null;
+		// A guest serves nothing, so it keeps no log of its own: the host records
+		// every write, including the ones a guest forwards.
+		this.changeLog = this.isGuest ? null : ChangeLog.open(this.app.dir, this.id);
 		this.sharedPath = '';
 		this.sync = null;
 		this.driveMap = new Map();
@@ -180,6 +194,25 @@ export default class DriveSession extends ReadyResource {
 		await this.shared.ready();
 		log('shared folder ready');
 
+		// The content home: a real Hyperdrive whose cores replicate over the
+		// connection that is already open, so a peer pulls the blocks it asks for
+		// instead of asking this process for whole files. A guest needs the content
+		// key; an invite from before content had its own drive has none, and that
+		// peer keeps reading over RPC.
+		if (this.isGuest) {
+			this.content = this._remoteContentKey
+				? new Hyperdrive(this.app.store!.session(), b4a.from(this._remoteContentKey, 'hex'))
+				: null;
+		} else {
+			this.content = await this._openOwnedContent();
+		}
+		if (this.content) {
+			await this.content.ready();
+			log('content drive ready', b4a.toString(this.content.key, 'hex').slice(0, 12));
+		} else {
+			log('content drive skipped', 'no key in this invite — RPC reads');
+		}
+
 		const initialDrives: (Localdrive | Hyperdrive)[] = [];
 
 		const regs = (await this.app
@@ -212,6 +245,9 @@ export default class DriveSession extends ReadyResource {
 
 		log('registered drives', String(initialDrives.length));
 
+		// Content first: a path the content drive holds is read and written there,
+		// even while an older mount still carries a copy of it.
+		if (this.content) initialDrives.unshift(this.content);
 		// The offline cache is mounted last: a cached copy must never shadow the
 		// live shared file system while the host is reachable.
 		initialDrives.push(this.shared, this.cache);
@@ -222,10 +258,14 @@ export default class DriveSession extends ReadyResource {
 			name?: string;
 			cache: Localdrive;
 			shared: Localdrive;
+			content: Hyperdrive | null;
+			changelog: ChangeLog | null;
 		} = {
 			drives: initialDrives,
 			cache: this.cache,
-			shared: this.shared
+			shared: this.shared,
+			content: this.content,
+			changelog: this.changeLog
 		};
 
 		if (this._remoteKey) {
@@ -240,6 +280,32 @@ export default class DriveSession extends ReadyResource {
 		this.drive = new SharedDrive(this.app.store!.session(), driveOpts as any);
 		await this.drive!.ready();
 		log('shared drive ready', this.isGuest ? 'guest' : 'host');
+
+		// One-time move of the old plain folder into the content drive. Owner only,
+		// and idempotent: a file already in the drive is dropped from the folder, and
+		// a copy that cannot be verified stays where it is and is reported.
+		//
+		// Detached on purpose: a repo with thousands of files would otherwise hold
+		// the whole app closed until the copy finished. The folder stays mounted and
+		// served while the move runs, and an interrupted move resumes on the next
+		// open (the marker is only written when nothing failed).
+		if (!this.isGuest && this.content) {
+			void migrateLegacyShared(this)
+				.then((migration) => {
+					if (migration && (migration.moved > 0 || migration.failed.length > 0)) {
+						log(
+							'legacy folder migrated',
+							`${migration.moved} moved, ${migration.already} already there, ${migration.failed.length} failed`
+						);
+						for (const problem of migration.failed.slice(0, 5)) {
+							console.warn(`[session ${this.id}] ${problem}`);
+						}
+					}
+				})
+				.catch((err: any) =>
+					console.warn(`[session ${this.id}] content migration failed:`, err?.message ?? err)
+				);
+		}
 
 		this.drive!.on('connected', () => {
 			console.log(`[session ${this.id}] connected`);
@@ -352,6 +418,79 @@ export default class DriveSession extends ReadyResource {
 		);
 	}
 
+	/**
+	 * The repo's own content drive.
+	 *
+	 * hyperdrive 13 ignores a `name` option: the core it opens is always `db`,
+	 * and it opens it exclusive. Two drives built from the same store are
+	 * therefore the same core, and the second one waits for the first to close —
+	 * forever. That is what a store-wide content drive amounts to: the first
+	 * repo opens, every later repo hangs boot. A store *namespace* is what
+	 * separates them, so each repo gets its own core and its own key.
+	 *
+	 * The core built before that fix is not thrown away: whoever wrote into it
+	 * keeps it (see _adoptLegacyContent).
+	 */
+	private async _openOwnedContent(): Promise<Hyperdrive> {
+		const legacy = await this._adoptLegacyContent();
+		if (legacy) return legacy;
+		// Storage identity, not branding: this namespace is what derives the key.
+		return new Hyperdrive(this.app.store!.namespace('ghost-content/' + this.id));
+	}
+
+	/**
+	 * Take over the content core that predates per-repo namespaces.
+	 *
+	 * That core holds real files, so one repo has to keep it or they become
+	 * unreachable. Exactly one does, recorded in a marker file so the choice is
+	 * the same on every boot; the first repo to open wins, and the others start
+	 * with an empty drive of their own.
+	 */
+	private async _adoptLegacyContent(): Promise<Hyperdrive | null> {
+		const marker = path.join(this.app.dir, 'legacy-content-owner');
+		let owner: string | null = null;
+		try {
+			owner = fs.readFileSync(marker, 'utf8').trim() || null;
+		} catch {
+			// Nothing adopted yet.
+		}
+		if (owner && owner !== this.id) return null;
+
+		// No name: the core every repo used to share.
+		const drive = new Hyperdrive(this.app.store!.session());
+		await drive.ready();
+		let empty = true;
+		try {
+			for await (const entry of drive.list('/')) {
+				if (entry?.key) {
+					empty = false;
+					break;
+				}
+			}
+		} catch {
+			empty = true;
+		}
+
+		if (empty) {
+			await drive.close().catch(() => {});
+			if (owner === this.id) {
+				console.warn(
+					`[session ${this.id}] ${marker} names this repo, but the old content core is empty`
+				);
+			}
+			return null;
+		}
+
+		if (owner !== this.id) {
+			fs.mkdirSync(path.dirname(marker), { recursive: true });
+			fs.writeFileSync(marker, `${this.id}\n`);
+		}
+		console.log(
+			`[session ${this.id}] keeping the pre-namespace content core ${b4a.toString(drive.key, 'hex').slice(0, 12)}…`
+		);
+		return drive;
+	}
+
 	protected async _close(): Promise<void> {
 		if (this.sync) await this.sync.close();
 		this.sync = null;
@@ -371,6 +510,7 @@ export default class DriveSession extends ReadyResource {
 		this.driveMap.clear();
 		if (this.cache) await this.cache.close();
 		if (this.shared) await this.shared.close();
+		if (this.content) await this.content.close();
 		if (this.drive) await this.drive.close();
 	}
 
@@ -456,6 +596,30 @@ export default class DriveSession extends ReadyResource {
 		return list;
 	}
 
+	/**
+	 * Folders on this disk the repo syncs with — nothing for a repo that only
+	 * exists in the app (created by the app itself, or a mirror of a peer's).
+	 *
+	 * This is what tells a repo somebody works in from one the app made up: a
+	 * release published from a folder belongs to the repo that folder is linked
+	 * to, not to whichever repo happens to carry the configured name.
+	 *
+	 * Both ways of linking count: a sync pair (`ph init`, the Settings tab) and a
+	 * registered local drive. They are stored apart, and a repo created from a
+	 * folder only has the former.
+	 */
+	localFolders(): string[] {
+		const folders = new Set<string>();
+		for (const pair of this.sync?.list() ?? []) {
+			if (pair.path) folders.add(pair.path);
+		}
+		for (const target of this.driveMap.keys()) {
+			if (/^[0-9a-f]{64}$/i.test(target)) continue;
+			folders.add(target);
+		}
+		return [...folders];
+	}
+
 	// --- Writing to the shared file system ---
 
 	get canWrite(): boolean {
@@ -509,6 +673,11 @@ export default class DriveSession extends ReadyResource {
 
 	get metaKeyHex(): string | null {
 		return this.metaCore ? b4a.toString(this.metaCore.key, 'hex') : null;
+	}
+
+	/** Key of the drive that holds repo content; what an invite/announcement shares. */
+	get contentKeyHex(): string | null {
+		return this.content ? b4a.toString(this.content.key, 'hex') : null;
 	}
 
 	async deleteMeta(collection: string, key: object): Promise<void> {
@@ -591,9 +760,14 @@ export default class DriveSession extends ReadyResource {
 		await this.requireSync().setDirection(id, direction);
 	}
 
+	// One-way only: remove local files the repo does not have.
+	async setSyncPrune(id: string, prune: boolean): Promise<void> {
+		await this.requireSync().setPrune(id, prune);
+	}
+
 	async runSync(
 		id: string,
-		options: { direction?: SyncDirection; onProgress?: SyncProgressFn } = {}
+		options: { direction?: SyncDirection; prune?: boolean; onProgress?: SyncProgressFn } = {}
 	): Promise<SyncSummary> {
 		return this.requireSync().run(id, options);
 	}

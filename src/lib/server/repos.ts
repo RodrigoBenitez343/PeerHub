@@ -99,10 +99,24 @@ const FORK_TIMEOUT = 45_000;
 
 export async function forkRepo(
 	app: PeerHubApp,
-	source: { repoId: string; name: string; description?: string | null; driveKey: string }
+	source: {
+		repoId: string;
+		name: string;
+		description?: string | null;
+		driveKey: string;
+		/** Key of the drive that holds the source's content. */
+		contentKey?: string | null;
+	}
 ): Promise<DriveSession> {
 	if (!source.driveKey || !/^[0-9a-f]{64}$/i.test(source.driveKey)) {
 		throw new Error('This repo did not publish a drive key — fork needs a public repo');
+	}
+	if (!source.contentKey || !/^[0-9a-f]{64}$/i.test(source.contentKey)) {
+		// Copying files needs the content drive; without its key a fork would be an
+		// empty repo wearing the source's name, so refuse instead of pretending.
+		throw new Error(
+			'This repo did not publish a content key — the source peer has to run a PeerHub that shares repo content'
+		);
 	}
 
 	const session = await app.createSession({
@@ -112,20 +126,36 @@ export async function forkRepo(
 	});
 
 	try {
-		const hd = new Hyperdrive(app.store!.session(), b4a.from(source.driveKey, 'hex'));
-		await hd.ready();
-		try {
-			await Promise.race([
-				hd.mirror(session.shared as any).done(),
-				new Promise((_, reject) =>
-					setTimeout(
-						() => reject(new Error('Source peer is offline — cannot copy the files')),
-						FORK_TIMEOUT
-					)
-				)
-			]);
-		} finally {
-			await hd.close().catch(() => {});
+		if (!session.content) throw new Error('This peer cannot hold repo content yet');
+
+		// A content core can only be open in one session, so an already-open mirror is
+		// reused; otherwise the source drive is opened just for this copy and closed.
+		const already = [...app.sessions.values()].find(
+			(candidate) =>
+				candidate !== session && candidate.contentKeyHex === source.contentKey
+		);
+
+		const copy = async (from: any) => {
+			const timeout = new Promise((_, reject) => {
+				const timer = setTimeout(
+					() => reject(new Error('Source peer is offline — cannot copy the files')),
+					FORK_TIMEOUT
+				);
+				timer.unref?.();
+			});
+			await Promise.race([from.mirror(session.content).done(), timeout]);
+		};
+
+		if (already?.content) {
+			await copy(already.content);
+		} else {
+			const hd = new Hyperdrive(app.store!.session(), b4a.from(source.contentKey, 'hex'));
+			await hd.ready();
+			try {
+				await copy(hd);
+			} finally {
+				await hd.close().catch(() => {});
+			}
 		}
 	} catch (err) {
 		await app.removeSession(session.id).catch(() => {});

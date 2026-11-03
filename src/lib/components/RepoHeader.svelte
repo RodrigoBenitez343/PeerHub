@@ -1,8 +1,9 @@
 <script lang="ts">
 	import Icon from './Icon.svelte';
+	import CloneDialog from './CloneDialog.svelte';
 	import type { IconName } from '$lib/icons';
 
-	export type RepoTab = 'files' | 'code' | 'commit' | 'settings';
+	export type RepoTab = 'files' | 'code' | 'commit' | 'releases' | 'settings';
 
 	let {
 		id,
@@ -25,11 +26,16 @@
 		forkedFrom?: string | null;
 	} = $props();
 
+	// Cloning is where a folder comes from: the repo is copied into an empty
+	// folder and kept in step from then on (see server/clone.ts).
+	let cloneOpen = $state(false);
+
 	const tabs = $derived.by(
 		(): Array<{ key: RepoTab; label: string; icon: IconName; href: string }> => [
 			{ key: 'files', label: 'Files', icon: 'folder', href: `/drive/${id}` },
 			{ key: 'code', label: 'Code', icon: 'code', href: `/drive/${id}/code` },
 			{ key: 'commit', label: 'Commit', icon: 'commit', href: `/drive/${id}/commit` },
+			{ key: 'releases', label: 'Releases', icon: 'tag', href: `/drive/${id}/releases` },
 			{ key: 'settings', label: 'Settings', icon: 'settings', href: `/drive/${id}/settings` }
 		]
 	);
@@ -53,7 +59,7 @@
 		{#if sourceRemoved}
 			<span
 				class="border-danger text-danger shrink-0 rounded border px-2 py-0.5 font-mono text-[9px] tracking-wider uppercase"
-				title="The owner deleted this repository. Your local copy is kept; remove it from Settings when you no longer need it."
+				title="The peer hosting this repository stopped answering. Your local copy is kept; remove it from Settings when you no longer need it."
 			>
 				source removed
 			</span>
@@ -72,6 +78,15 @@
 				fork
 			</span>
 		{/if}
+		<button
+			type="button"
+			onclick={() => (cloneOpen = true)}
+			class="border-border text-text-muted hover:text-accent ml-auto flex shrink-0 items-center gap-1.5 rounded border px-2.5 py-1 font-mono text-[9px] tracking-wider uppercase transition"
+			title="Copy this repository into a local folder"
+		>
+			<Icon name="branch" size={12} />
+			Clone
+		</button>
 	</div>
 
 	<nav class="mt-1.5 flex gap-1 overflow-x-auto px-2 md:px-3">
@@ -88,4 +103,6 @@
 			</a>
 		{/each}
 	</nav>
+
+	<CloneDialog {id} {name} bind:open={cloneOpen} />
 </header>

@@ -236,6 +236,7 @@
 					{#if data.drive.isGuest && data.repo.visibility === 'public' && data.driveKey}
 						<form method="POST" action="/?/fork" use:enhance={onFork}>
 							<input type="hidden" name="driveKey" value={data.driveKey} />
+							<input type="hidden" name="contentKey" value={data.contentKey ?? ''} />
 							<input type="hidden" name="repoId" value={data.drive.id} />
 							<input type="hidden" name="name" value={data.drive.name} />
 							<input type="hidden" name="description" value={data.repo.description ?? ''} />

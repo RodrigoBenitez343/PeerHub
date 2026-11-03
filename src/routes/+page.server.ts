@@ -80,6 +80,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			openedId: null as string | null,
 			driveKey: null as string | null,
 			metaKey: null as string | null,
+			contentKey: null as string | null,
 			peerKey: '',
 			repoId: repo.id,
 			openable: false
@@ -98,6 +99,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 				openedId: entry.driveKey ? (openedByDriveKey.get(entry.driveKey) ?? null) : null,
 				driveKey: entry.driveKey,
 				metaKey: entry.metaKey,
+				contentKey: entry.contentKey,
 				peerKey: entry.peerKey,
 				repoId: entry.repoId,
 				openable: entry.visibility === 'public' && !!entry.driveKey
@@ -163,6 +165,7 @@ export const actions: Actions = {
 		const form = await request.formData();
 		const driveKey = (form.get('driveKey') ?? '').toString();
 		const metaKey = (form.get('metaKey') ?? '').toString();
+		const contentKey = (form.get('contentKey') ?? '').toString();
 		const name = (form.get('name') ?? '').toString() || 'Public repo';
 		const description = (form.get('description') ?? '').toString();
 		const ownerKey = (form.get('ownerKey') ?? '').toString();
@@ -174,6 +177,7 @@ export const actions: Actions = {
 			session = await locals.app.openPublicRepo({
 				driveKey,
 				metaKey: HEX64.test(metaKey) ? metaKey : null,
+				contentKey: HEX64.test(contentKey) ? contentKey : null,
 				name,
 				description: description || null,
 				ownerKey: HEX64.test(ownerKey) ? ownerKey : undefined
@@ -188,6 +192,7 @@ export const actions: Actions = {
 		const form = await request.formData();
 		const driveKey = (form.get('driveKey') ?? '').toString();
 		const repoId = (form.get('repoId') ?? '').toString();
+		const contentKey = (form.get('contentKey') ?? '').toString();
 		const name = (form.get('name') ?? '').toString() || 'fork';
 		const description = (form.get('description') ?? '').toString();
 
@@ -203,7 +208,8 @@ export const actions: Actions = {
 						repoId,
 						name,
 						description: description || null,
-						driveKey
+						driveKey,
+						contentKey: HEX64.test(contentKey) ? contentKey : null
 					});
 					handle.progress(1, 1);
 					return { repoId: session.id, name: session.name };
@@ -218,7 +224,8 @@ export const actions: Actions = {
 				repoId,
 				name,
 				description: description || null,
-				driveKey
+				driveKey,
+				contentKey: HEX64.test(contentKey) ? contentKey : null
 			});
 		} catch (err: any) {
 			return fail(400, { error: err.message });

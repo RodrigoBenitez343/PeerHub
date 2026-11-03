@@ -160,7 +160,16 @@ test('buildIgnore still works when the shared side is unreachable', async () => 
 
 test('formatSummary reports the base counts and only mentions non-zero extras', () => {
 	assert.equal(
-		formatSummary({ added: 1, updated: 0, deleted: 2, conflicts: 0, skipped: 0, errors: [] }),
+		formatSummary({
+			added: 1,
+			updated: 0,
+			deleted: 2,
+			conflicts: 0,
+			skipped: 0,
+			errors: [],
+			changes: 0,
+			source: 'listing'
+		}),
 		'1 added, 0 updated, 2 deleted'
 	);
 	assert.equal(
@@ -170,9 +179,11 @@ test('formatSummary reports the base counts and only mentions non-zero extras', 
 			deleted: 0,
 			conflicts: 3,
 			skipped: 4,
-			errors: ['a', 'b']
+			errors: ['a', 'b'],
+			changes: 9,
+			source: 'log'
 		}),
-		'0 added, 0 updated, 0 deleted, 3 conflicts, 4 local changes not pushed (one-way), 2 errors'
+		'0 added, 0 updated, 0 deleted, 3 conflicts, 4 local files not in the repo (kept), 2 errors'
 	);
 });
 

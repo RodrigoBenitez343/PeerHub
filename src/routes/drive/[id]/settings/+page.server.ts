@@ -1,8 +1,10 @@
 import type { Actions, PageServerLoad } from './$types';
 import { error, fail } from '@sveltejs/kit';
 import { getSession, loadPeers } from '$lib/server/loaders';
-import { formatSummary } from '$lib/server/sync';
+import { formatSummary, type SyncProgress } from '$lib/server/sync';
 import { isEnhancedRequest, type JobHandle } from '$lib/server/jobs';
+// Mounting an extra drive still uses the platform picker (Android SAF); cloning
+// does not: it goes through the desktop shell's own folder chooser.
 import { pickerAvailable, pickDirectory } from 'ghost-picker';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -81,44 +83,7 @@ export const actions: Actions = {
 		return {};
 	},
 
-	// --- Local sync ---
-
-	addSync: async ({ locals, params, request }) => {
-		const session = locals.app.getSession(params.id);
-		if (!session) throw error(404, 'Drive not found');
-
-		const form = await request.formData();
-		const target = (form.get('path') ?? '').toString().trim();
-		if (!target) return fail(400, { error: 'Folder path required' });
-
-		try {
-			const pair = await session.addSyncPair(target);
-			return { message: `Syncing with ${pair.path}` };
-		} catch (err: any) {
-			return fail(400, { error: err.message });
-		}
-	},
-
-	pickSyncFolder: async ({ locals, params }) => {
-		if (!pickerAvailable()) return fail(400, { error: 'Folder picker not supported here' });
-
-		const session = locals.app.getSession(params.id);
-		if (!session) throw error(404, 'Drive not found');
-
-		const picked = await pickDirectory();
-		if (!picked) return { cancelled: true };
-		if (!picked.path) {
-			return fail(400, { error: `Could not resolve a path for ${picked.uri} — type it instead` });
-		}
-
-		try {
-			await session.addSyncPair(picked.path);
-		} catch (err: any) {
-			return fail(400, { error: err.message });
-		}
-
-		return {};
-	},
+	// --- Local clones ---
 
 	removeSync: async ({ locals, params, request }) => {
 		const session = locals.app.getSession(params.id);
@@ -170,6 +135,29 @@ export const actions: Actions = {
 				direction === 'two-way'
 					? 'Folder set to two-way — local changes can be pushed'
 					: 'Folder set to one-way — it now only receives'
+		};
+	},
+
+	// One-way only: make the folder mirror the repo, deleting local files the repo
+	// does not have. Off by default because those files cannot be recovered.
+	setSyncPrune: async ({ locals, params, request }) => {
+		const session = locals.app.getSession(params.id);
+		if (!session) throw error(404, 'Drive not found');
+
+		const form = await request.formData();
+		const id = (form.get('syncId') ?? '').toString();
+		const prune = (form.get('prune') ?? '') === '1';
+		if (!id) return fail(400, { error: 'Missing sync folder' });
+
+		try {
+			await session.setSyncPrune(id, prune);
+		} catch (err: any) {
+			return fail(400, { error: err.message });
+		}
+		return {
+			message: prune
+				? 'Folder now mirrors the repo — the next sync deletes local files the repo does not have'
+				: 'Folder keeps local files the repo does not have'
 		};
 	},
 
@@ -229,7 +217,11 @@ export const actions: Actions = {
 				{ kind: 'sync', label: 'Syncing folder', repoId: params.id },
 				async (handle: JobHandle) => {
 					const summary = await session.runSync(id, {
-						onProgress: (ev: { done: number }) => handle.progress(ev.done)
+						onProgress: (ev: SyncProgress) => {
+							// The walk cannot know its own size, so the bar stays indeterminate
+							// until the plan arrives; from then on it counts the files it named.
+							if (ev.total !== undefined) handle.progress(ev.done, ev.total);
+						}
 					});
 					return { summary, message: `Sync done — ${formatSummary(summary)}` };
 				}

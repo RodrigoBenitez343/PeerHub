@@ -9,3 +9,5 @@ build
 .app-instance.lock
 .app-instance.pid
 dist
+# Exported signing bundles (private keys) — never committed
+.certs

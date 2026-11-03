@@ -124,7 +124,7 @@
 									{#if repo.sourceRemoved}
 										<span
 											class="border-danger text-danger rounded border px-1.5 py-0.5 font-mono text-[9px] tracking-wider uppercase"
-											title="The owner deleted this repository. Your local copy is kept."
+											title="The peer hosting this repository stopped answering. Your local copy is kept."
 										>
 											source removed
 										</span>
@@ -157,6 +157,7 @@
 									<form method="POST" action="/?/open">
 										<input type="hidden" name="driveKey" value={repo.driveKey} />
 										<input type="hidden" name="metaKey" value={repo.metaKey ?? ''} />
+										<input type="hidden" name="contentKey" value={repo.contentKey ?? ''} />
 										<input type="hidden" name="name" value={repo.name} />
 										<input type="hidden" name="description" value={repo.description ?? ''} />
 										<input type="hidden" name="ownerKey" value={repo.ownerKey} />
@@ -170,6 +171,7 @@
 									</form>
 									<form method="POST" action="/?/fork">
 										<input type="hidden" name="driveKey" value={repo.driveKey} />
+										<input type="hidden" name="contentKey" value={repo.contentKey ?? ''} />
 										<input type="hidden" name="repoId" value={repo.repoId} />
 										<input type="hidden" name="name" value={repo.name} />
 										<input type="hidden" name="description" value={repo.description ?? ''} />

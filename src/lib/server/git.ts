@@ -1,4 +1,6 @@
 import b4a from 'b4a';
+import fs from 'fs';
+import path from 'path';
 import { crypto_generichash } from 'sodium-native';
 import type DriveSession from './session.js';
 import { emitActivity } from './events.js';
@@ -94,24 +96,85 @@ async function fileDigest(session: DriveSession, path: string, size: number, mti
 	return hashHex(Buffer.concat(chunks));
 }
 
+// --- tree digest cache ---
+
+interface TreeDigestCacheEntry {
+	size: number;
+	mtime: number | null;
+	digest: string;
+}
+
+type TreeDigestCache = Record<string, TreeDigestCacheEntry>;
+
+function cacheFile(session: DriveSession): string | null {
+	// Sessions in tests have no storage directory; without one there is nowhere to
+	// cache, so the tree is simply hashed as before.
+	const dir = session.app?.dir;
+	if (!dir) return null;
+	return path.join(dir, 'sessions', session.id, 'tree-digests.json');
+}
+
+function readTreeCache(session: DriveSession): TreeDigestCache {
+	const file = cacheFile(session);
+	if (!file) return {};
+	try {
+		const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+		return parsed && typeof parsed === 'object' ? parsed : {};
+	} catch {
+		return {};
+	}
+}
+
+function writeTreeCache(session: DriveSession, cache: TreeDigestCache): void {
+	const file = cacheFile(session);
+	if (!file) return;
+	try {
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, JSON.stringify(cache));
+	} catch (err: any) {
+		// A cache that cannot be written costs a hash next time, nothing more.
+		console.warn('tree digest cache not saved:', err?.message ?? err);
+	}
+}
+
 // Snapshot the shared namespace (the repo's working tree, never the local
 // offline cache) into digest entries.
+//
+// Hashing every file on every commit is the one place a commit costs the whole
+// repository again — and, on a peer, a whole-repository download. Digests are
+// therefore cached per path and reused while size and mtime are unchanged, the
+// same rule the sync engine applies before it decides a file moved. A rewritten
+// file gets a new mtime, so the cache misses exactly when it should.
 export async function buildTree(
 	session: DriveSession,
 	prefix = DEFAULT_TREE_PREFIX
 ): Promise<TreeEntry[]> {
 	const files = await session.drive!.manifestShared(prefix);
+	const cached = readTreeCache(session);
+	const next: TreeDigestCache = {};
 	const tree: TreeEntry[] = [];
+	let changed = false;
+
 	for (const file of files) {
 		// `/.peerhub` holds snapshots and other bookkeeping, never repo content.
 		if (isReservedRepoPath(file.path)) continue;
-		tree.push({
-			path: file.path,
-			size: file.size,
-			mtime: file.mtime,
-			digest: await fileDigest(session, file.path, file.size, file.mtime)
-		});
+
+		const hit = cached[file.path];
+		const reusable = !!hit && hit.size === file.size && hit.mtime === file.mtime;
+		const digest = reusable
+			? hit.digest
+			: await fileDigest(session, file.path, file.size, file.mtime);
+		if (!reusable) changed = true;
+
+		next[file.path] = { size: file.size, mtime: file.mtime, digest };
+		tree.push({ path: file.path, size: file.size, mtime: file.mtime, digest });
 	}
+
+	// Keep only the paths this tree has: a deleted file must not leave a digest
+	// behind for a future file that reuses the path.
+	if (!changed) changed = Object.keys(next).length !== Object.keys(cached).length;
+	if (changed) writeTreeCache(session, next);
+
 	return tree.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 

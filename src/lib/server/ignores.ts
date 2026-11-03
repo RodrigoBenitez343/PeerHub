@@ -25,21 +25,28 @@ async function readIgnoreFile(session: DriveSession, path: string): Promise<stri
 	return Buffer.concat(chunks).subarray(0, MAX_BYTES).toString('utf-8');
 }
 
-export async function loadIgnoreSources(session: DriveSession): Promise<IgnoreSource[]> {
+export async function loadIgnoreSources(
+	session: DriveSession,
+	manifest?: Array<{ path: string }>
+): Promise<IgnoreSource[]> {
 	const hit = cache.get(session.id);
 	if (hit && Date.now() - hit.at < TTL_MS) return hit.sources;
 
-	let manifest: Array<{ path: string }> = [];
-	try {
-		manifest = await session.drive!.manifestShared('/');
-	} catch {
-		// Guest with no host reachable: no rules to apply. The upload itself will
-		// fail for the same reason, so this never silently lets ignored files in.
-		return [];
+	// A caller that already listed the repo hands its manifest over, so a sync run
+	// sends one listing instead of asking for the same thing twice.
+	let entries = manifest ?? [];
+	if (!manifest) {
+		try {
+			entries = await session.drive!.manifestShared('/');
+		} catch {
+			// Guest with no host reachable: no rules to apply. The upload itself will
+			// fail for the same reason, so this never silently lets ignored files in.
+			return [];
+		}
 	}
 
 	const sources: IgnoreSource[] = [];
-	for (const entry of manifest) {
+	for (const entry of entries) {
 		if (entry.path !== '/.gitignore' && !entry.path.endsWith('/.gitignore')) continue;
 		try {
 			const text = await readIgnoreFile(session, entry.path);

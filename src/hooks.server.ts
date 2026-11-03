@@ -23,6 +23,10 @@ if (!building && !app) {
 			)
 		)
 		.catch((err: Error) => {
+			// Kept on the instance so /api/status can report it: the shell polls
+			// that endpoint while the window is up, and "failed" has to look
+			// different from "still opening".
+			app.bootError = err?.message ?? String(err);
 			console.error(`[boot] FAILED after ${Date.now() - started}ms:`, err);
 			console.error('[boot] stack:', err?.stack);
 		});

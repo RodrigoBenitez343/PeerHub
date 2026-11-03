@@ -57,6 +57,16 @@
 			<Icon name="globe" size={18} />
 			Explore
 		</a>
+		<a
+			href="/updates"
+			class="flex items-center gap-3 rounded px-2.5 py-2 font-mono text-[11px] tracking-wider uppercase transition {path ===
+			'/updates'
+				? 'bg-bg-hover text-accent'
+				: 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'}"
+		>
+			<Icon name="download" size={18} />
+			Updates
+		</a>
 	</nav>
 
 	<nav class="flex-1 overflow-y-auto py-2">

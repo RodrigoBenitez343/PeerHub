@@ -26,6 +26,9 @@ import {
 } from '../src/lib/server/git.ts';
 import { HISTORY_PREFIX } from '../src/lib/server/paths.ts';
 import { metaSession } from './helpers.ts';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const AUTHOR = 'a'.repeat(64);
 
@@ -124,6 +127,47 @@ test('buildTree hashes small files, digests large ones, and skips bookkeeping', 
 		`size:${large.byteLength}:0`,
 		'past the cap the digest is size+mtime'
 	);
+});
+
+test('buildTree reuses digests while size and mtime are unchanged', async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'peerhub-tree-'));
+	const session = metaSession();
+	session.app.dir = dir;
+	session.memory.write('/a.txt', Buffer.from('one'));
+	session.memory.write('/b.txt', Buffer.from('two'));
+	session.memory.setMtime('/a.txt', 1000);
+	session.memory.setMtime('/b.txt', 1000);
+	session.memory.resetStats();
+
+	const first = await buildTree(session);
+	assert.equal(session.memory.stats.readCalls, 2, 'a cold cache hashes every file');
+
+	session.memory.resetStats();
+	const second = await buildTree(session);
+	assert.deepEqual(second, first, 'a warm cache rebuilds the same tree');
+	assert.equal(session.memory.stats.readCalls, 0, 'an unchanged tree must not be re-read');
+
+	// A rewritten file is the only one hashed again.
+	session.memory.write('/b.txt', Buffer.from('two v2'));
+	session.memory.setMtime('/b.txt', 2000);
+	session.memory.resetStats();
+	const third = await buildTree(session);
+	assert.equal(session.memory.stats.readCalls, 1, 'only the file that moved is hashed');
+	assert.equal(third.find((entry) => entry.path === '/b.txt')!.digest, digestBytes(Buffer.from('two v2')));
+
+	// A removed path leaves no digest behind.
+	session.memory.files.delete('/a.txt');
+	const fourth = await buildTree(session);
+	assert.deepEqual(
+		fourth.map((entry) => entry.path),
+		['/b.txt']
+	);
+	assert.deepEqual(
+		JSON.parse(fs.readFileSync(path.join(dir, 'sessions', 'test-repo', 'tree-digests.json'), 'utf8')),
+		{ '/b.txt': { size: 6, mtime: 2000, digest: digestBytes(Buffer.from('two v2')) } }
+	);
+
+	fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('previewFile detects binary content, truncates, and refuses missing files', async () => {

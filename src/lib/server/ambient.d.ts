@@ -37,6 +37,7 @@ declare module 'corestore' {
 		createKeyPair(name: string): Promise<{ publicKey: Buffer; secretKey: Buffer }>;
 		replicate(conn: unknown): unknown;
 		session(): Corestore;
+		namespace(name: string, opts?: { namespace?: Buffer }): Corestore;
 		get(opts: { name?: string; key?: Buffer | Uint8Array | string }): any;
 	}
 }
@@ -89,14 +90,25 @@ declare module 'localdrive' {
 }
 
 declare module 'hyperdrive' {
+	interface HyperdriveOptions {
+		name?: string;
+		key?: Buffer | Uint8Array | string;
+	}
 	export default class Hyperdrive {
-		constructor(store: unknown, key?: Buffer);
+		constructor(store: unknown, keyOrOpts?: Buffer | Uint8Array | string | HyperdriveOptions);
 		readonly key: Buffer;
+		readonly writable: boolean;
+		/** Entry metadata (mtime, content hash) is kept when this is true. */
+		readonly supportsMetadata: boolean;
 		ready(): Promise<void>;
 		close(): Promise<void>;
 		get(path: string, opts?: object): Promise<any>;
+		put(path: string, buffer: Buffer | Uint8Array, opts?: object): Promise<any>;
+		del(path: string): Promise<any>;
 		list(prefix?: string, opts?: object): AsyncIterable<any>;
-		entry(path: string): Promise<any>;
+		entry(path: string, opts?: object): Promise<any>;
+		createReadStream(path: string, opts?: object): AsyncIterable<Buffer>;
+		createWriteStream(path: string, opts?: object): any;
 		mirror(out: unknown, opts?: object): { done(): Promise<void> };
 	}
 }
@@ -110,6 +122,7 @@ declare module 'distributed-drive' {
 	}
 	export default class DistributedDrive extends EventEmitter {
 		constructor(store: unknown, opts?: DistributedDriveOptions);
+		readonly store: any;
 		readonly key: Buffer;
 		readonly peers: number;
 		readonly drives: unknown[];
@@ -167,6 +180,17 @@ declare module 'protomux' {
 declare module 'sodium-native' {
 	export function randombytes_buf(buf: Buffer): void;
 	export function crypto_generichash(output: Buffer, input: Buffer): void;
+	// ed25519, as used by corestore's keypair derivation and the release signing.
+	export function crypto_sign_keypair(publicKey: Buffer, secretKey: Buffer, seed?: Buffer): void;
+	export function crypto_sign_detached(signature: Buffer, message: Buffer, secretKey: Buffer): void;
+	export function crypto_sign_verify_detached(
+		signature: Buffer,
+		message: Buffer,
+		publicKey: Buffer
+	): boolean;
+	export const crypto_sign_PUBLICKEYBYTES: number;
+	export const crypto_sign_SECRETKEYBYTES: number;
+	export const crypto_sign_BYTES: number;
 }
 
 declare module 'b4a' {

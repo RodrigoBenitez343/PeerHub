@@ -179,6 +179,76 @@ test('pruning reports the removed drive key as gone', async () => {
 	assert.deepEqual(removed, { gone: [DRIVE_A], live: [] });
 });
 
+test('a repo the owner deletes is forgotten on the peers that opened it', async () => {
+	const app = fakeApp();
+	app.mirrors.set('mine', { id: 'mine', driveKey: DRIVE_A, ownerKey: ALICE });
+	app.mirrors.set('other', { id: 'other', driveKey: DRIVE_B, ownerKey: BOB });
+
+	await ingestAnnouncements(app, envelope(ALICE, [announcement()]));
+	await ingestAnnouncements(app, envelope(ALICE, []));
+
+	assert.deepEqual(
+		[...app.mirrors.keys()],
+		['other'],
+		'an empty mirror of a deleted repo must not be left in the list'
+	);
+});
+
+test('a mirror is forgotten even when its announcement row is already pruned', async () => {
+	// The peer was offline when the repo was deleted: by the time the owner
+	// answers again the row has expired, so only "this owner no longer lists my
+	// repo" can retire the mirror.
+	const app = fakeApp();
+	app.mirrors.set('mine', { id: 'mine', driveKey: DRIVE_A, ownerKey: ALICE });
+
+	await ingestAnnouncements(
+		app,
+		envelope(ALICE, [announcement({ repoId: 'kept', driveKey: DRIVE_B })])
+	);
+
+	assert.deepEqual([...app.mirrors.keys()], [], 'the deleted repo must not linger after a restart');
+});
+
+test('a mirror of a repo the owner still lists is kept', async () => {
+	const app = fakeApp();
+	app.mirrors.set('mine', { id: 'mine', driveKey: DRIVE_A, ownerKey: ALICE });
+
+	await ingestAnnouncements(app, envelope(ALICE, [announcement()]));
+
+	assert.deepEqual([...app.mirrors.keys()], ['mine']);
+});
+
+test('a peer cannot retire the mirrors of a repo it does not own', async () => {
+	const app = fakeApp();
+	app.mirrors.set('mine', { id: 'mine', driveKey: DRIVE_A, ownerKey: ALICE });
+
+	// Bob announces nothing, which says nothing about Alice's repo.
+	await ingestAnnouncements(app, envelope(BOB, []));
+
+	assert.deepEqual([...app.mirrors.keys()], ['mine']);
+});
+
+test('a bare array never forgets a mirror it cannot attribute', async () => {
+	const app = fakeApp();
+	app.mirrors.set('mine', { id: 'mine', driveKey: DRIVE_A, ownerKey: ALICE });
+
+	await ingestAnnouncements(app, JSON.stringify([]));
+
+	assert.deepEqual([...app.mirrors.keys()], ['mine']);
+	assert.deepEqual(app.forgetCalls, [], 'no sender, nothing to retire');
+});
+
+test('expiry never forgets a mirror: a silent peer has not deleted anything', async () => {
+	const app = fakeApp();
+	app.mirrors.set('mine', { id: 'mine', driveKey: DRIVE_A, ownerKey: ALICE });
+	app.rows.set(`${ALICE}|a1`, announcement({ repoId: 'a1', lastSeen: 1_000 }));
+
+	await pruneAnnouncements(app, { ttlMs: 5_000, now: 10_000 });
+
+	assert.deepEqual([...app.mirrors.keys()], ['mine']);
+	assert.deepEqual(app.forgetCalls, []);
+});
+
 test('a peer may not retire another peer’s repos by claiming its key', async () => {
 	// The sender is taken from the payload, not from the connection. Anyone
 	// connected can therefore send { peerKey: victim, repos: [] } and wipe the

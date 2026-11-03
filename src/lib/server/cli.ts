@@ -271,7 +271,7 @@ export async function restore(
 export async function syncNow(
 	app: PeerHubApp,
 	cwd: string,
-	options: { push?: boolean; onProgress?: SyncProgressFn } = {}
+	options: { push?: boolean; prune?: boolean; onProgress?: SyncProgressFn } = {}
 ): Promise<SyncSummary> {
 	const { session, pair } = await locateRepo(app, cwd);
 	// Default is whatever the folder is set to (one-way unless changed). `--push`
@@ -280,7 +280,7 @@ export async function syncNow(
 		pair.id,
 		options.push
 			? { direction: 'two-way', onProgress: options.onProgress }
-			: { onProgress: options.onProgress }
+			: { prune: options.prune, onProgress: options.onProgress }
 	);
 }
 
@@ -460,6 +460,8 @@ export interface CliRequest {
 	mode?: 'on' | 'off';
 	commit?: boolean;
 	push?: boolean;
+	/** One-way only: also delete local files the repo does not have. */
+	prune?: boolean;
 	direction?: 'pull' | 'one-way' | 'two-way';
 	dryRun?: boolean;
 	limit?: number;
@@ -488,7 +490,11 @@ export async function runCli(
 			if (!request.sha) throw new Error('commit sha required');
 			return restore(app, cwd, request.sha, request.paths ?? [], { dryRun: request.dryRun });
 		case 'sync':
-			return syncNow(app, cwd, { push: request.push, onProgress });
+			return syncNow(app, cwd, {
+				push: request.push,
+				prune: request.prune,
+				onProgress
+			});
 		case 'auto':
 			return setAuto(app, cwd, request.mode ?? 'on', { commit: request.commit });
 		case 'direction':

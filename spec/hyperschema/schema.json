@@ -1,5 +1,5 @@
 {
-	"version": 9,
+	"version": 10,
 	"schema": [
 		{
 			"name": "session",
@@ -1094,6 +1094,11 @@
 					"name": "writeMode",
 					"type": "string",
 					"version": 9
+				},
+				{
+					"name": "contentKey",
+					"type": "string",
+					"version": 10
 				}
 			]
 		}

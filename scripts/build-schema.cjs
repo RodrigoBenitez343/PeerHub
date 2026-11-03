@@ -331,7 +331,10 @@ ns.register({
 		{ name: 'lastSeen', type: 'uint', required: true },
 		// Mirrors repo.writeMode so a guest knows, before writing, whether the
 		// owner allows peer writes (the RPC policy call is still authoritative).
-		{ name: 'writeMode', type: 'string' }
+		{ name: 'writeMode', type: 'string' },
+		// Appended: the drive that holds repo content. Without it a guest can only
+		// read over RPC from the host, so it cannot pull blocks from any other peer.
+		{ name: 'contentKey', type: 'string' } // public repos only
 	]
 });
 

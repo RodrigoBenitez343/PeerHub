@@ -5,6 +5,8 @@ import b4a from 'b4a';
 import { randombytes_buf } from 'sodium-native';
 
 import { writeIntoStream } from './shared-drive.js';
+import type SharedDrive from './shared-drive.js';
+import type { ChangePage, SharedFile } from './shared-drive.js';
 import { invalidateEntries } from './loaders.js';
 import { loadIgnoreSources } from './ignores.js';
 import { isReservedRepoPath } from './paths.js';
@@ -16,6 +18,11 @@ import type DriveSession from './session.js';
 // linked folder is a checkout that follows it. That is the same default the
 // repo itself has (owner → peers).
 //
+// A one-way folder receives, so a file it holds that the repo does not have can
+// never be pushed anywhere. Two rules follow, and they are the user's choice:
+// by default such a file is kept and counted as pending local work; with the
+// pair's `prune` on, it is deleted, and the folder mirrors the repo exactly.
+//
 // Two-way is opt-in per folder: only then can a local edit, addition or
 // deletion reach the repo. Even then the newer side wins per path, so a stale
 // folder can never overwrite a version that moved after it — the propagation
@@ -24,6 +31,13 @@ import type DriveSession from './session.js';
 // The last known state of each path is kept per side, so a copy is only redone
 // when that side actually changed — a fresh mtime on the receiving side can
 // never bounce back and forth.
+//
+// The repo side is not listed from scratch every run. The owner keeps a change
+// log (see changelog.ts), the state remembers how far it was consumed, and a run
+// asks for "everything after N": the paths that did not move are not even named,
+// so a large repo costs what its changes cost. A repo that cannot answer for the
+// cursor (no log, trimmed past it, an older peer) sends the whole listing and the
+// run carries on exactly as it did before.
 //
 // mtime alone is not enough: an editor can rewrite a file with the same length
 // inside the two-second tolerance, and that edit used to be invisible (a commit
@@ -34,6 +48,10 @@ import type DriveSession from './session.js';
 const AUTO_INTERVAL = 15_000;
 const MTIME_SLACK = 2000;
 const DIGEST_CAP = DIGEST_SIZE_CAP;
+// A file in flight reports itself every PROGRESS_STEP bytes, and only above
+// PROGRESS_MIN: below that the wait is shorter than the line would live.
+const PROGRESS_STEP = 1024 * 1024;
+const PROGRESS_MIN = 2 * 1024 * 1024;
 const IGNORED_FILES = new Set(['.ds_store', 'thumbs.db', 'desktop.ini']);
 const TEMP_SUFFIX = '.localdrive.tmp';
 
@@ -48,6 +66,12 @@ export interface SyncPair {
 	autoCommit: boolean;
 	/** Default 'pull'. Anything else must be chosen by the user. */
 	direction: SyncDirection;
+	/**
+	 * One-way only: remove local files the repo does not have, so the folder stays
+	 * an exact checkout of the repo. Off by default — it deletes files nothing else
+	 * can bring back, so the user has to ask for it.
+	 */
+	prune: boolean;
 	createdAt: number;
 	lastSyncAt: number | null;
 	lastResult: string | null;
@@ -57,11 +81,26 @@ export interface SyncPairView extends SyncPair {
 	running: boolean;
 }
 
-/** One transferred file, reported live so the CLI can print a running list. */
+/** One step of a run, reported live so the CLI can print a running list. */
 export interface SyncProgress {
-	kind: 'upload' | 'download' | 'delete';
+	/** 'scan' is the walk and the plan; the rest are files that moved. */
+	kind: 'scan' | 'upload' | 'download' | 'delete';
 	path: string;
+	/**
+	 * Files decided so far, counted against `total`. A byte tick repeats the count
+	 * of the file in flight, because it is not a new file.
+	 */
 	done: number;
+	/** Files this run will decide. Absent while the folder is still being walked. */
+	total?: number;
+	/** What those files add up to, so a caller can say how much has to move. */
+	totalBytes?: number;
+	/** Files the folder walk has seen so far; only on a 'scan' event. */
+	scanned?: number;
+	/** Size of the file in flight, when either side says what it is. */
+	size?: number;
+	/** Bytes of that file through so far; absent on the event that starts it. */
+	loaded?: number;
 }
 
 export type SyncProgressFn = (ev: SyncProgress) => void;
@@ -71,9 +110,13 @@ export interface SyncSummary {
 	updated: number;
 	deleted: number;
 	conflicts: number;
-	/** Local changes left alone because the folder is one-way. */
+	/** Local files the repo does not have, kept because the folder does not mirror. */
 	skipped: number;
 	errors: string[];
+	/** Paths the repo's change log reported for this run. */
+	changes: number;
+	/** Where the repo's file list came from: the log, or a full listing. */
+	source: 'log' | 'listing';
 }
 
 interface SideStat {
@@ -81,6 +124,8 @@ interface SideStat {
 	mtime: number | null;
 	/** Content hash for files up to DIGEST_CAP; absent for large files and old state. */
 	digest?: string;
+	/** Version stamp of the repo's copy, when it lives in the content drive. */
+	stamp?: string;
 }
 
 interface StateEntry {
@@ -88,7 +133,94 @@ interface StateEntry {
 	shared?: SideStat;
 }
 
-type SyncState = Record<string, StateEntry>;
+/** Result of asking one side whether it moved away from the recorded state. */
+interface Probe {
+	changed: boolean;
+	/** Digest of the current copy, when deciding that required reading it. */
+	digest?: string;
+}
+
+/** What `record` may trust instead of measuring a side again. */
+interface RecordHints {
+	/** The local file as it stands now; null means it is gone. */
+	local?: SideStat | null;
+	/** The shared file as it stands now; null means it is gone. */
+	shared?: SideStat | null;
+	/** Digest already computed from the local copy. */
+	localProbe?: string;
+	/** Digest already computed from the shared copy. */
+	sharedProbe?: string;
+}
+
+// Digest taken while the bytes are already in flight, so recording the new state
+// costs neither side a second read. Files above DIGEST_CAP stop buffering and
+// report no digest, exactly like cappedDigest.
+class DigestTap {
+	bytes = 0;
+	private parts: Uint8Array[] = [];
+	private over = false;
+
+	async *through(source: AsyncIterable<Buffer | Uint8Array>): AsyncGenerator<Buffer> {
+		for await (const chunk of source) {
+			const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+			this.bytes += buf.byteLength;
+			if (!this.over) {
+				if (this.bytes > DIGEST_CAP) {
+					this.over = true;
+					this.parts = [];
+				} else this.parts.push(buf);
+			}
+			yield buf;
+		}
+	}
+
+	digest(): string | undefined {
+		if (this.over) return undefined;
+		return digestBytes(Buffer.concat(this.parts));
+	}
+}
+
+// Bytes of one file while it is in flight, so a large transfer shows how far it
+// got instead of looking stuck. It holds nothing: the chunks pass through.
+class ProgressTap {
+	private loaded = 0;
+	private reported = 0;
+	private size: number | null;
+	private emit: (loaded: number) => void;
+
+	constructor(size: number | null, emit: (loaded: number) => void) {
+		this.size = size;
+		this.emit = emit;
+	}
+
+	async *through(source: AsyncIterable<Buffer | Uint8Array>): AsyncGenerator<Buffer> {
+		for await (const chunk of source) {
+			const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+			this.loaded += buf.byteLength;
+			if (
+				this.size !== null &&
+				this.size >= PROGRESS_MIN &&
+				this.loaded - this.reported >= PROGRESS_STEP
+			) {
+				this.reported = this.loaded;
+				this.emit(this.loaded);
+			}
+			yield buf;
+		}
+
+		// One last tick closes the file: the caller knows the copy is complete and
+		// the line it was printing can be finished.
+		if (this.reported > 0 && this.loaded !== this.reported) this.emit(this.loaded);
+	}
+}
+
+type SyncState = {
+	paths: Record<string, StateEntry>;
+	/** Change-log sequence this folder has consumed; 0 when it never had one. */
+	cursor: number;
+	/** Which log that cursor belongs to; empty when there is none. */
+	log: string;
+};
 
 export default class SessionSync {
 	private session: DriveSession;
@@ -151,6 +283,7 @@ export default class SessionSync {
 			auto: false,
 			autoCommit: false,
 			direction: 'pull',
+			prune: false,
 			createdAt: Date.now(),
 			lastSyncAt: null,
 			lastResult: null
@@ -199,15 +332,23 @@ export default class SessionSync {
 		this.save();
 	}
 
+	/** Make a one-way folder an exact checkout: local extras are deleted. */
+	setPrune(id: string, prune: boolean): void {
+		const pair = this.pairs.find((p) => p.id === id);
+		if (!pair) throw new Error('Sync folder not found');
+		pair.prune = !!prune;
+		this.save();
+	}
+
 	async run(
 		id: string,
-		options: { direction?: SyncDirection; onProgress?: SyncProgressFn } = {}
+		options: { direction?: SyncDirection; prune?: boolean; onProgress?: SyncProgressFn } = {}
 	): Promise<SyncSummary> {
 		const pair = this.pairs.find((p) => p.id === id);
 		if (!pair) throw new Error('Sync folder not found');
 		if (this.running.has(id)) throw new Error('This folder is already syncing');
 
-		return this.exclusive(pair, options.direction, options.onProgress);
+		return this.exclusive(pair, options.direction, options.prune, options.onProgress);
 	}
 
 	// Called when a peer connects: catch up on anything that moved meanwhile.
@@ -241,18 +382,17 @@ export default class SessionSync {
 	private async exclusive(
 		pair: SyncPair,
 		direction?: SyncDirection,
+		prune?: boolean,
 		onProgress?: SyncProgressFn
 	): Promise<SyncSummary> {
 		this.running.add(pair.id);
 
 		try {
-			const summary = await syncOnce(
-				this.session,
-				pair,
-				this.stateFile(pair.id),
-				direction ?? pair.direction,
+			const summary = await syncOnce(this.session, pair, this.stateFile(pair.id), {
+				direction: direction ?? pair.direction,
+				prune: prune ?? pair.prune,
 				onProgress
-			);
+			});
 			pair.lastSyncAt = Date.now();
 			pair.lastResult = formatSummary(summary);
 
@@ -308,6 +448,9 @@ export default class SessionSync {
 					// that was the old default. Two-way is now an explicit choice, so a
 					// pair with no stored direction comes back as one-way.
 					direction: pair.direction === 'two-way' ? 'two-way' : 'pull',
+					// Same for mirroring: a pair stored before it existed keeps local
+					// extras until the user asks for them to be removed.
+					prune: !!pair.prune,
 					createdAt: pair.createdAt ?? Date.now(),
 					lastSyncAt: pair.lastSyncAt ?? null,
 					lastResult: pair.lastResult ?? null
@@ -331,9 +474,10 @@ async function syncOnce(
 	session: DriveSession,
 	pair: SyncPair,
 	stateFile: string,
-	direction: SyncDirection = 'pull',
-	onProgress?: SyncProgressFn
+	options: { direction?: SyncDirection; prune?: boolean; onProgress?: SyncProgressFn } = {}
 ): Promise<SyncSummary> {
+	const { onProgress } = options;
+	const direction: SyncDirection = options.direction ?? 'pull';
 	const drive = session.drive;
 	if (!drive) throw new Error('Drive not ready');
 	if (!drive.connected) throw new Error('Not connected to the host');
@@ -351,6 +495,10 @@ async function syncOnce(
 		);
 	}
 
+	// Mirroring is a one-way idea: a two-way folder offers a local file the repo
+	// does not have back to the repo, so there is nothing to prune.
+	const prune = !!options.prune && !twoWay;
+
 	const local = new Localdrive(pair.path, { atomic: true });
 	await local.ready();
 
@@ -360,7 +508,9 @@ async function syncOnce(
 		deleted: 0,
 		conflicts: 0,
 		skipped: 0,
-		errors: []
+		errors: [],
+		changes: 0,
+		source: 'listing'
 	};
 	const state = readState(stateFile);
 
@@ -370,124 +520,331 @@ async function syncOnce(
 	// linked project would otherwise mirror its node_modules. One walk feeds both
 	// the ignore rules and the file list, so a folder with a huge ignored tree is
 	// traversed once instead of twice.
-	const { files: localFiles, sources: localIgnore } = await localScan(local);
-	const ignore = await buildIgnore(session, local, localIgnore);
+	const { files: localFiles, sources: localIgnore } = await localScan(local, (seen) =>
+		onProgress?.({ kind: 'scan', path: '', done: 0, scanned: seen })
+	);
 
-	const sharedFiles = new Map<string, SideStat>();
-	for (const file of await drive.manifestShared('/')) {
-		// `/.peerhub` is the repo's own history store, not content to mirror.
-		if (isReservedRepoPath(file.path)) continue;
-		sharedFiles.set(file.path, { size: file.size, mtime: file.mtime });
-	}
+	// What the repo holds: the previous state, brought up to date with whatever the
+	// owner's log reported since this folder last synced.
+	const snapshot = await sharedSnapshot(drive, state);
+	const sharedFiles = snapshot.files;
+	summary.changes = snapshot.changes;
+	summary.source = snapshot.source;
 
-	let transferred = 0;
-	const report = (kind: SyncProgress['kind'], filePath: string) =>
-		onProgress?.({ kind, path: filePath, done: ++transferred });
+	const ignore = await buildIgnore(
+		session,
+		local,
+		localIgnore,
+		[...sharedFiles.keys()].map((filePath) => ({ path: filePath }))
+	);
 
-	const localToShared = (filePath: string) => {
-		report('upload', filePath);
-		return drive.putShared(filePath, local.createReadStream(filePath));
+	// One event per file the run decides. It is counted against the plan, so the
+	// bar and the printed list never disagree about where the run is.
+	const report = (kind: SyncProgress['kind'], filePath: string, size?: number | null): number => {
+		onProgress?.({
+			kind,
+			path: filePath,
+			done: examined,
+			total: candidates.length,
+			size: size ?? undefined
+		});
+		return examined;
 	};
-	const sharedToLocal = async (filePath: string) => {
-		report('download', filePath);
-		await writeIntoStream(local.createWriteStream(filePath), drive.readShared(filePath));
+
+	// Ticks for the file in flight. A consumer prints them on one line; a tick
+	// repeats `done` because it is not a new file, only a new byte count.
+	const ticking = (
+		kind: SyncProgress['kind'],
+		filePath: string,
+		done: number,
+		size: number | null
+	) =>
+		new ProgressTap(size, (loaded) =>
+			onProgress?.({
+				kind,
+				path: filePath,
+				done,
+				total: candidates.length,
+				size: size ?? undefined,
+				loaded
+			})
+		);
+
+	// Both directions return what the receiving side now holds, digest included, so
+	// the state can be recorded without reading either copy a second time. A drive
+	// that does not report the resulting stat leaves that side to be measured.
+	//
+	// An upload has to know the content hash *before* the write: the host stores it
+	// as entry metadata, which is what lets any reader decide that a file moved
+	// without asking for its bytes. The extra read is a local disk read, and it is
+	// capped — a large file gets no hash and is compared by version stamp instead.
+	const localToShared = async (
+		filePath: string
+	): Promise<{ shared?: SideStat; digest?: string }> => {
+		const size = localFiles.get(filePath)?.size ?? null;
+		const done = report('upload', filePath, size);
+		const digest =
+			size !== null && size <= DIGEST_CAP
+				? await cappedDigest(local.createReadStream(filePath)).catch(() => undefined)
+				: undefined;
+
+		const bytes = ticking('upload', filePath, done, size).through(local.createReadStream(filePath));
+		const result = await drive.putShared(filePath, bytes, { hash: digest ?? null });
+		if (typeof result?.size !== 'number') return { digest };
+		return {
+			shared: {
+				size: result.size,
+				mtime: result.mtime ?? null,
+				digest: digest ?? result.hash ?? undefined,
+				stamp: result.stamp ?? undefined
+			},
+			digest
+		};
 	};
 
-	const record = async (filePath: string) => {
-		const entry: StateEntry = {};
+	// A download writes the bytes and, when the repo did not already say what they
+	// hash to, hashes them on the way through. A peer reads from its own replica of
+	// the content drive when that replica holds the version the log promised, and
+	// from the host otherwise.
+	const sharedToLocal = async (
+		filePath: string,
+		stat?: SideStat
+	): Promise<{ local: SideStat; digest?: string }> => {
+		const size = stat?.size ?? null;
+		const done = report('download', filePath, size);
+		const tap = stat?.digest ? null : new DigestTap();
 
+		let bytes: AsyncIterable<Buffer> = drive.readSharedVersion(filePath, stat?.stamp ?? null);
+		bytes = ticking('download', filePath, done, size).through(bytes);
+		if (tap) bytes = tap.through(bytes);
+		await writeIntoStream(local.createWriteStream(filePath), bytes);
+
+		const entry = await local.entry(filePath).catch(() => null);
+		const digest = stat?.digest ?? tap?.digest();
+		return {
+			local: {
+				size: entry?.value?.blob?.byteLength ?? 0,
+				mtime: typeof entry?.mtime === 'number' ? entry.mtime : Date.now(),
+				digest
+			},
+			digest
+		};
+	};
+
+	// Digest for one side: reuse a probe from this run or the recorded one when the
+	// bytes cannot have moved, and only read when neither can answer.
+	const digestOf = async (
+		size: number,
+		mtime: number | null,
+		probe: string | undefined,
+		previous: SideStat | undefined,
+		read: () => Promise<string | undefined>
+	): Promise<string | undefined> => {
+		if (size > DIGEST_CAP) return undefined;
+		if (probe) return probe;
+		if (previous?.digest && previous.size === size && previous.mtime === mtime) {
+			return previous.digest;
+		}
+		return read().catch(() => undefined);
+	};
+
+	const measureLocal = async (
+		filePath: string,
+		probe: string | undefined,
+		previous: SideStat | undefined
+	): Promise<SideStat | null> => {
 		const localEntry = await local.entry(filePath).catch(() => null);
-		if (localEntry && !localEntry.value?.linkname) {
-			const size = localEntry.value?.blob?.byteLength ?? 0;
-			entry.local = {
-				size,
-				mtime: typeof localEntry.mtime === 'number' ? localEntry.mtime : null,
-				digest:
-					size <= DIGEST_CAP
-						? await cappedDigest(local.createReadStream(filePath)).catch(() => undefined)
-						: undefined
-			};
-		}
+		if (!localEntry || localEntry.value?.linkname) return null;
 
-		const sharedEntry = await drive.statShared(filePath).catch(() => null);
-		if (sharedEntry?.exists) {
-			entry.shared = {
-				size: sharedEntry.size,
-				mtime: sharedEntry.mtime,
-				digest:
-					sharedEntry.size <= DIGEST_CAP
-						? await cappedDigest(drive.readShared(filePath)).catch(() => undefined)
-						: undefined
-			};
-		}
-
-		if (entry.local || entry.shared) state[filePath] = entry;
-		else delete state[filePath];
+		const size = localEntry.value?.blob?.byteLength ?? 0;
+		const mtime = typeof localEntry.mtime === 'number' ? localEntry.mtime : null;
+		return {
+			size,
+			mtime,
+			digest: await digestOf(size, mtime, probe, previous, () =>
+				cappedDigest(local.createReadStream(filePath))
+			)
+		};
 	};
 
-	const paths = new Set<string>([
-		...localFiles.keys(),
-		...sharedFiles.keys(),
-		...Object.keys(state)
-	]);
+	const measureShared = async (
+		filePath: string,
+		probe: string | undefined,
+		previous: SideStat | undefined
+	): Promise<SideStat | null> => {
+		const sharedEntry = await drive.statShared(filePath).catch(() => null);
+		if (!sharedEntry?.exists) return null;
 
-	let pendingWrites = 0;
+		const { size, mtime } = sharedEntry;
+		return {
+			size,
+			mtime,
+			digest: await digestOf(size, mtime, probe, previous, () =>
+				cappedDigest(drive.readShared(filePath))
+			),
+			stamp: sharedEntry.stamp ?? undefined
+		};
+	};
 
-	for (const filePath of [...paths].sort()) {
+	const record = async (filePath: string, hints: RecordHints = {}) => {
+		const entry: StateEntry = {};
+		const previous = state.paths[filePath];
+
+		const localSide =
+			hints.local !== undefined
+				? hints.local
+				: await measureLocal(filePath, hints.localProbe, previous?.local);
+		if (localSide) entry.local = localSide;
+
+		const sharedSide =
+			hints.shared !== undefined
+				? hints.shared
+				: await measureShared(filePath, hints.sharedProbe, previous?.shared);
+		if (sharedSide) entry.shared = sharedSide;
+
+		if (entry.local || entry.shared) state.paths[filePath] = entry;
+		else delete state.paths[filePath];
+	};
+
+	// The plan: every path this run has to look at, decided before the loop so the
+	// run knows how many files and how many bytes it faces. A first sync of a large
+	// folder is the case that matters — the caller used to learn the size of the
+	// job from the transfers themselves, so a bar could never be more than a guess.
+	// Paths an ignore rule rules out are dropped here, exactly as the loop would
+	// have dropped them.
+	const candidates: string[] = [];
+	let planBytes = 0;
+	for (const filePath of [
+		...new Set([...localFiles.keys(), ...sharedFiles.keys(), ...Object.keys(state.paths)])
+	].sort()) {
 		if (isIgnored(filePath)) continue;
-
-		const localStat = localFiles.get(filePath);
-		const sharedStat = sharedFiles.get(filePath);
-		const base = state[filePath];
-
-		// Ignored paths are left alone in both directions: never pushed, and
-		// never removed from the shared drive (that data is not ours to drop).
-		const ignored = ignore.ignored(filePath);
 
 		// An ignored path never travels: skip the copy and the two stat round-trips
 		// `record()` would spend tracking it, and drop any stale entry so an
 		// enormous ignored tree does not bloat the state file. Anything already in
 		// the repo still falls through below, left untouched.
-		if (ignored && !sharedFiles.has(filePath)) {
-			if (state[filePath]) delete state[filePath];
+		if (ignore.ignored(filePath) && !sharedFiles.has(filePath)) {
+			if (state.paths[filePath]) delete state.paths[filePath];
 			continue;
 		}
 
-		const localChanged = await changed(localStat, base?.local, () =>
+		candidates.push(filePath);
+		planBytes += localFiles.get(filePath)?.size ?? sharedFiles.get(filePath)?.size ?? 0;
+	}
+
+	onProgress?.({
+		kind: 'scan',
+		path: '',
+		done: 0,
+		total: candidates.length,
+		totalBytes: planBytes
+	});
+
+	let examined = 0;
+	let pendingWrites = 0;
+
+	for (const filePath of candidates) {
+		examined++;
+
+		const localStat = localFiles.get(filePath);
+		const sharedStat = sharedFiles.get(filePath);
+		const base = state.paths[filePath];
+
+		// Ignored paths already in the repo are left alone in both directions:
+		// never pushed, and never removed from the shared drive (that data is not
+		// ours to drop).
+		const ignored = ignore.ignored(filePath);
+
+		const localProbe = await changed(localStat, base?.local, () =>
 			cappedDigest(local.createReadStream(filePath))
 		);
-		const sharedChanged = await changed(sharedStat, base?.shared, () =>
+		const sharedProbe = await changed(sharedStat, base?.shared, () =>
 			cappedDigest(drive.readShared(filePath))
 		);
-		if (!localChanged && !sharedChanged) continue;
+		if (!localProbe.changed && !sharedProbe.changed) continue;
+
+		const localChanged = localProbe.changed;
+		const sharedChanged = sharedProbe.changed;
 
 		try {
+			// What each side holds once this branch is done, so `record` never reads a
+			// file again just to store its digest.
+			let localNow: SideStat | undefined;
+			let sharedNow: SideStat | undefined;
+			let localGone = false;
+			let sharedGone = false;
+
+			const push = async () => {
+				const upload = await localToShared(filePath);
+				sharedNow = upload.shared;
+				if (localStat) localNow = { ...localStat, digest: upload.digest };
+			};
+			const pull = async () => {
+				const landed = await sharedToLocal(filePath, sharedStat);
+				localNow = landed.local;
+				if (sharedStat) {
+					sharedNow = { ...sharedStat, digest: landed.digest ?? sharedStat.digest };
+				}
+			};
+			// Mirroring: the repo does not have this path, so the folder must not
+			// either. Both sides are recorded as absent, which saves a stat round trip.
+			const pruneLocal = async () => {
+				report('delete', filePath);
+				await local.del(filePath);
+				summary.deleted++;
+				localGone = true;
+				sharedGone = true;
+			};
+
 			if (localChanged && sharedChanged) {
-				summary.conflicts++;
+				// Both sides moved. Without a recorded base there is nothing either side
+				// could have moved away from: that is the run that adopts the folder, and
+				// counting every file as a conflict would bury the ones that matter.
+				const diverged = !!base;
+
 				if (localStat && sharedStat) {
-					// Same amount of data on both sides is almost certainly the copy we
-					// made ourselves, with a fresher mtime on one of them.
-					if (localStat.size !== sharedStat.size) {
+					// Equal sizes are usually our own copy with a fresher mtime, but a
+					// same-length edit on both sides is a real divergence: compare content
+					// before deciding that nothing happened.
+					const localDigest =
+						localProbe.digest ??
+						(await cappedDigest(local.createReadStream(filePath)).catch(() => undefined));
+					const sharedDigest =
+						sharedProbe.digest ??
+						(await cappedDigest(drive.readShared(filePath)).catch(() => undefined));
+					const same =
+						localStat.size === sharedStat.size && !!localDigest && localDigest === sharedDigest;
+
+					// The same bytes on both sides are not a divergence, whichever way the
+					// mtimes fell: there is nothing to resolve and nothing to copy.
+					if (!same) {
+						if (diverged) summary.conflicts++;
 						if (twoWay && !ignored && localIsNewer(localStat, sharedStat, base)) {
 							// Newest → oldest: push only when this folder really is newer.
-							await localToShared(filePath);
+							await push();
 							summary.updated++;
 						} else {
-							await sharedToLocal(filePath);
+							await pull();
 							summary.updated++;
 						}
 					}
 				} else if (localStat && !sharedStat) {
-					// Removed from the repo, edited here. Keep the edit when the folder
-					// may push; otherwise leave it alone (never destroy local work).
+					// Gone from the repo, and this folder holds a copy of its own. A
+					// two-way folder offers it back; a mirror drops it; a plain one-way
+					// folder keeps it, because local work is never destroyed unasked.
 					if (twoWay && !ignored) {
-						await localToShared(filePath);
+						await push();
 						summary.added++;
-					} else summary.skipped++;
+					} else if (prune) {
+						await pruneLocal();
+					} else {
+						if (diverged) summary.conflicts++;
+						summary.skipped++;
+					}
 				} else if (!localStat && sharedStat) {
 					// Deleted here but still in the repo: it comes back, so a one-way
 					// folder can never silently lose content.
-					await sharedToLocal(filePath);
+					await pull();
 					summary.added++;
 				}
 			} else if (localChanged) {
@@ -495,37 +852,51 @@ async function syncOnce(
 				if (ignored) {
 					// Nothing to propagate upward.
 				} else if (!twoWay) {
-					// One-way: local edits stay local and stay visible as pending.
-					// Not recorded, so flipping the folder to two-way pushes them.
-					summary.skipped++;
-					continue;
+					// One-way: an edit of a path the repo still has stays local and stays
+					// visible as pending (not recorded, so flipping the folder to two-way
+					// pushes it). A local file the repo does not have is what a mirror is
+					// asked to drop.
+					if (prune && localStat && !sharedStat) {
+						await pruneLocal();
+					} else {
+						summary.skipped++;
+						continue;
+					}
 				} else if (localStat && !sharedStat) {
-					await localToShared(filePath);
+					await push();
 					summary.added++;
 				} else if (localStat && sharedStat) {
-					await localToShared(filePath);
+					await push();
 					summary.updated++;
 				} else if (!localStat && sharedStat) {
 					report('delete', filePath);
 					await drive.deleteShared(filePath);
 					summary.deleted++;
+					sharedGone = true;
 				}
 			} else {
 				// Only the repo moved: repo → folder, in both directions.
 				if (sharedStat && !localStat) {
-					await sharedToLocal(filePath);
+					await pull();
 					summary.added++;
 				} else if (sharedStat && localStat) {
-					await sharedToLocal(filePath);
+					await pull();
 					summary.updated++;
 				} else if (!sharedStat && localStat) {
 					report('delete', filePath);
 					await local.del(filePath);
 					summary.deleted++;
+					localGone = true;
 				}
 			}
 
-			await record(filePath);
+			await record(filePath, {
+				local: localNow ?? (localGone ? null : undefined),
+				// The log already said what the shared side holds, hash included.
+				shared: sharedNow ?? (sharedGone ? null : sharedStat),
+				localProbe: localProbe.digest,
+				sharedProbe: sharedProbe.digest
+			});
 
 			if (++pendingWrites >= 25) {
 				writeState(stateFile, state);
@@ -536,8 +907,112 @@ async function syncOnce(
 		}
 	}
 
+	// A path that failed keeps the old cursor: the log is replayed next run, and a
+	// replayed entry is harmless because the state already says what landed. A
+	// cursor that ran ahead of a failure would drop that path from every later
+	// sync without a word.
+	if (summary.errors.length === 0) {
+		state.cursor = snapshot.cursor;
+		state.log = snapshot.log;
+	}
+
 	writeState(stateFile, state);
 	return summary;
+}
+
+interface SharedSnapshot {
+	/** Every path the repo holds right now, with the stat its last write recorded. */
+	files: Map<string, SideStat>;
+	/** Sequence number to store once this run is done; 0 when there is no log. */
+	cursor: number;
+	/** Identity of the log that number belongs to. */
+	log: string;
+	/** Paths the log reported for this run. */
+	changes: number;
+	source: 'log' | 'listing';
+}
+
+/**
+ * The repo side of one run: the paths the state already knew, brought up to date
+ * with whatever the owner's log reported since that state was recorded.
+ *
+ * A log that cannot answer for the cursor sends the whole listing in the same
+ * answer, so a sync never guesses and never pays two round trips to find out.
+ */
+async function sharedSnapshot(drive: SharedDrive, state: SyncState): Promise<SharedSnapshot> {
+	const files = new Map<string, SideStat>();
+	for (const [filePath, entry] of Object.entries(state.paths)) {
+		if (entry?.shared) files.set(filePath, entry.shared);
+	}
+
+	let page: ChangePage | null = null;
+	try {
+		page = await drive.changesSince(state.cursor, state.log);
+	} catch {
+		// A peer from before the log existed: the listing below still works.
+	}
+
+	if (!page) {
+		const listing = await drive.manifestShared('/');
+		return { files: fromListing(listing), cursor: 0, log: '', changes: 0, source: 'listing' };
+	}
+
+	let changes = 0;
+	let head = page.head;
+	let guard = 0;
+
+	while (true) {
+		// A listing stands on its own: nothing older has to be reconstructed, and
+		// the cursor restarts from what the owner just said its head was.
+		if (page.full) {
+			return {
+				files: fromListing(page.listing),
+				cursor: page.head,
+				log: page.log,
+				changes,
+				source: 'listing'
+			};
+		}
+
+		for (const entry of page.entries) {
+			if (isReservedRepoPath(entry.path)) continue;
+			changes++;
+			if (entry.op === 'del') files.delete(entry.path);
+			else
+				files.set(entry.path, {
+					size: entry.size,
+					mtime: entry.mtime,
+					digest: entry.hash ?? undefined,
+					stamp: entry.stamp ?? undefined
+				});
+		}
+
+		head = page.head;
+		if (!page.more) break;
+		// A very old cursor can hold a long tail of pages. Anything left is fetched
+		// on the next run: the cursor stops at what was actually read.
+		if (++guard > 50) break;
+
+		page = await drive.changesSince(head, page.log);
+	}
+
+	return { files, cursor: head, log: page.log, changes, source: 'log' };
+}
+
+function fromListing(listing: SharedFile[]): Map<string, SideStat> {
+	const files = new Map<string, SideStat>();
+	for (const file of listing) {
+		// `/.peerhub` is the repo's own history store, not content to mirror.
+		if (isReservedRepoPath(file.path)) continue;
+		// The hash and the stamp travel with the entry, so change detection needs no read.
+		files.set(file.path, {
+			size: file.size,
+			mtime: file.mtime,
+			digest: file.hash ?? undefined,
+			stamp: file.stamp ?? undefined
+		});
+	}
+	return files;
 }
 
 // Rules for one sync run: the repo's stored .gitignore files plus the mirrored
@@ -547,12 +1022,13 @@ async function syncOnce(
 export async function buildIgnore(
 	session: DriveSession,
 	local: Localdrive,
-	localSources?: IgnoreSource[]
+	localSources?: IgnoreSource[],
+	sharedManifest?: Array<{ path: string }>
 ): Promise<IgnoreMatcher> {
 	const sources: IgnoreSource[] = [];
 
 	try {
-		sources.push(...(await loadIgnoreSources(session)));
+		sources.push(...(await loadIgnoreSources(session, sharedManifest)));
 	} catch {
 		// Shared rules unreachable: the local ones still apply.
 	}
@@ -596,13 +1072,32 @@ async function readLocalText(local: Localdrive, filePath: string): Promise<strin
 // ponytail: flat recursive list, so an ignored venv is still traversed; prune by
 // directory if a folder ever grows past a single walk being tolerable.
 async function localScan(
-	local: Localdrive
+	local: Localdrive,
+	onSeen?: (seen: number) => void
 ): Promise<{ files: Map<string, SideStat>; sources: IgnoreSource[] }> {
 	const files = new Map<string, SideStat>();
 	const sources: IgnoreSource[] = [];
 
+	// A first walk of a linked project is the longest silence a sync has, and it is
+	// silent because nothing is being copied. Report how many files have gone by —
+	// how many are left cannot be known until the walk ends, so this is a count,
+	// not a bar. Throttled by count and by time, so neither a huge tree nor a slow
+	// disk turns the walk into a stream of events.
+	let seen = 0;
+	let reported = 0;
+	let reportedAt = Date.now();
+	const tick = (now: number) => {
+		if (!onSeen) return;
+		if (seen - reported < 250 && now - reportedAt < 250) return;
+		reported = seen;
+		reportedAt = now;
+		onSeen(seen);
+	};
+
 	for await (const entry of local.list('/')) {
 		if (!entry?.key || entry.value?.linkname) continue;
+		seen++;
+		tick(Date.now());
 		if (entry.key.endsWith('/.gitignore')) {
 			try {
 				const text = await readLocalText(local, entry.key);
@@ -629,32 +1124,46 @@ async function localScan(
  * Size decides first. When the size matches and the mtime is unchanged, the
  * file is untouched. When the size matches but the mtime drifted inside the
  * tolerance, that is the ambiguous case a fast same-size edit produces, so the
- * content is hashed and compared with the digest stored at record time.
+ * content is hashed and compared with the digest stored at record time. A digest
+ * computed here is handed back so recording the state does not repeat the read.
  */
 async function changed(
 	current: SideStat | undefined,
 	previous: SideStat | undefined,
 	hash: () => Promise<string | undefined>
-): Promise<boolean> {
-	if (!current && !previous) return false;
-	if (!current || !previous) return true;
-	if (current.size !== previous.size) return true;
+): Promise<Probe> {
+	if (!current && !previous) return { changed: false };
+	if (!current || !previous) return { changed: true };
+
+	// A content hash on both sides answers the question without reading anything,
+	// and it catches a rewrite that kept both the size and the mtime.
+	if (current.digest && previous.digest) {
+		return { changed: current.digest !== previous.digest, digest: current.digest };
+	}
+
+	// The version stamp is exact for a file too big to hash: two writes never share
+	// one, and a peer that holds this stamp holds these bytes.
+	if (current.stamp && previous.stamp) {
+		return { changed: current.stamp !== previous.stamp };
+	}
+
+	if (current.size !== previous.size) return { changed: true };
 
 	if (current.mtime != null && previous.mtime != null) {
 		const drift = Math.abs(current.mtime - previous.mtime);
-		if (drift > MTIME_SLACK) return true;
-		if (drift === 0) return false;
+		if (drift > MTIME_SLACK) return { changed: true };
+		if (drift === 0) return { changed: false };
 	}
 
 	// Old state files have no digest; keep the previous behaviour for them rather
 	// than re-copying every file once after an upgrade.
-	if (!previous.digest) return false;
+	if (!previous.digest) return { changed: false };
 	const digest = await hash().catch(() => undefined);
-	if (!digest) return false;
-	return digest !== previous.digest;
+	if (!digest) return { changed: false };
+	return { changed: digest !== previous.digest, digest };
 }
 
-async function cappedDigest(
+export async function cappedDigest(
 	source: AsyncIterable<Buffer | Uint8Array>
 ): Promise<string | undefined> {
 	const parts: Uint8Array[] = [];
@@ -687,12 +1196,29 @@ function isInside(child: string, parent: string): boolean {
 	return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
+function emptyState(): SyncState {
+	return { paths: {}, cursor: 0, log: '' };
+}
+
 function readState(file: string): SyncState {
 	try {
 		const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-		return parsed && typeof parsed === 'object' ? parsed : {};
+		if (!parsed || typeof parsed !== 'object') return emptyState();
+
+		// A file written before the change log kept the paths at the top level. It is
+		// read as a list with no cursor, so the first run after the upgrade lists the
+		// repo once and everything continues from there.
+		const paths =
+			parsed.paths && typeof parsed.paths === 'object'
+				? parsed.paths
+				: typeof parsed.cursor === 'number'
+					? {}
+					: parsed;
+		const cursor = typeof parsed.cursor === 'number' && parsed.paths ? parsed.cursor : 0;
+
+		return { paths, cursor, log: typeof parsed.log === 'string' ? parsed.log : '' };
 	} catch {
-		return {};
+		return emptyState();
 	}
 }
 
@@ -712,7 +1238,9 @@ export function formatSummary(summary: SyncSummary): string {
 		`${summary.deleted} deleted`
 	];
 	if (summary.conflicts > 0) parts.push(`${summary.conflicts} conflicts`);
-	if (summary.skipped > 0) parts.push(`${summary.skipped} local changes not pushed (one-way)`);
+	// Not "changes": a one-way folder cannot push these, so they only become real
+	// work when the folder is switched to two-way or made to mirror the repo.
+	if (summary.skipped > 0) parts.push(`${summary.skipped} local files not in the repo (kept)`);
 	if (summary.errors.length > 0) parts.push(`${summary.errors.length} errors`);
 	return parts.join(', ');
 }

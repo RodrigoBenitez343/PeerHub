@@ -10,7 +10,7 @@
 //   peerhub log [-n 20]
 //   peerhub show <sha>
 //   peerhub restore <sha> [paths...] [--dry-run]
-//   peerhub sync [--push]
+//   peerhub sync [--push] [--prune]
 //   peerhub direction one-way|two-way
 //   peerhub auto on|off [--commit]
 //   peerhub repos
@@ -34,8 +34,9 @@ const USAGE = `peerhub — talk to your running PeerHub from the terminal
   show <sha>                 one commit and what it changed
   restore <sha> [paths...]   write that commit's files back locally
       --dry-run              report what would change, write nothing
-  sync [--push]              reconcile the linked folder with the repo now
+  sync [--push] [--prune]    reconcile the linked folder with the repo now
       --push                 also push local changes (one run, folder stays one-way)
+      --prune                also delete local files the repo does not have (one run)
   direction one-way|two-way  how the linked folder is allowed to move
   auto on|off [--commit]     periodic sync; --commit keeps a changelist per pass
   repos                      repositories and their linked folders
@@ -110,6 +111,7 @@ function parseArgs(argv) {
 		private: false,
 		commit: false,
 		push: false,
+		prune: false,
 		limit: null
 	};
 	const positional = [];
@@ -122,6 +124,7 @@ function parseArgs(argv) {
 		else if (arg === '--private') flags.private = true;
 		else if (arg === '--commit') flags.commit = true;
 		else if (arg === '--push') flags.push = true;
+		else if (arg === '--prune') flags.prune = true;
 		else if (arg === '--url') url = argv[++i];
 		else if (arg === '-m' || arg === '--message') flags.message = argv[++i];
 		else if (arg === '-n') flags.limit = Number(argv[++i]);
@@ -307,7 +310,10 @@ function printSummary(summary) {
 	console.log(
 		`sync: +${summary.added} ~${summary.updated} -${summary.deleted}` +
 			(summary.conflicts ? ` conflicts:${summary.conflicts}` : '') +
-			(summary.skipped ? ` local-only:${summary.skipped}` : '')
+			(summary.skipped ? ` local-only:${summary.skipped}` : '') +
+			// The repo side came from its change log: say how much of it was read,
+			// because "0 changes" is the useful answer for a large repo.
+			(summary.source === 'log' ? ` changes:${summary.changes}` : '')
 	);
 	if (summary.skipped) {
 		console.log('  these changes stayed local — the folder is one-way (peerhub direction two-way)');
@@ -319,8 +325,54 @@ function printSummary(summary) {
 // plain consoles on Windows print these without turning them into mojibake).
 const PROGRESS_MARK = { upload: '^', download: 'v', delete: 'x' };
 
+function megabytes(bytes) {
+	if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
+	if (bytes >= 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))} MiB`;
+	return `${Math.round(bytes / 1024)} KiB`;
+}
+
+// A large file reports its own bytes. On a terminal those ticks rewrite one line;
+// in a pipe they would be noise, so only the start of the file is printed there.
+let liveLine = false;
+
+function endLiveLine() {
+	if (!liveLine) return;
+	process.stdout.write('\n');
+	liveLine = false;
+}
+
+// The walk of a big folder is the first long silence a sync has, so it says how
+// many files have gone by. That is a count, not a bar: how many the run faces is
+// only known when the walk ends, and that plan is printed next.
+function printScan(ev) {
+	if (ev.total === undefined) {
+		if (!process.stdout.isTTY || !ev.scanned) return;
+		process.stdout.write(`\r  … scanning  ${ev.scanned} files`);
+		liveLine = true;
+		return;
+	}
+
+	endLiveLine();
+	console.log(
+		`  scanning: ${ev.total} files` + (ev.totalBytes ? `, ${megabytes(ev.totalBytes)}` : '')
+	);
+}
+
 function printProgress(ev) {
-	console.log(`  ${PROGRESS_MARK[ev.kind] ?? '*'} ${String(ev.done).padStart(5)}  ${ev.path}`);
+	if (ev.kind === 'scan') return printScan(ev);
+
+	const count = ev.total ? `${ev.done}/${ev.total}` : String(ev.done);
+	const line = `  ${PROGRESS_MARK[ev.kind] ?? '*'} ${count.padStart(9)}  ${ev.path}`;
+	if (ev.loaded === undefined || !ev.size) {
+		endLiveLine();
+		console.log(line);
+		return;
+	}
+	if (!process.stdout.isTTY) return;
+
+	const pct = Math.floor((ev.loaded / ev.size) * 100);
+	process.stdout.write(`\r${line}  ${pct}% ${megabytes(ev.loaded)}/${megabytes(ev.size)}`);
+	liveLine = true;
 }
 
 // --- main ---
@@ -343,6 +395,7 @@ const send = async (payload, print, hint) => {
 		{ cwd, stream: true, ...payload },
 		flags.json ? undefined : printProgress
 	);
+	endLiveLine();
 	if (flags.json) {
 		console.log(JSON.stringify(response.result, null, 2));
 		return;
@@ -399,7 +452,7 @@ switch (cmd) {
 	}
 
 	case 'sync':
-		await send({ cmd: 'sync', push: flags.push }, printSummary, 'Syncing…');
+		await send({ cmd: 'sync', push: flags.push, prune: flags.prune }, printSummary, 'Syncing…');
 		break;
 
 	case 'direction': {

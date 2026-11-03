@@ -1,5 +1,6 @@
 import { error } from '@sveltejs/kit';
 import b4a from 'b4a';
+import { RELEASE_DIR, isReleaseStorePath, isStoreOnlyFolder } from './paths.js';
 import type PeerHubApp from './app.js';
 import type DriveSession from './session.js';
 
@@ -76,6 +77,38 @@ interface CacheEntry {
 
 const entriesCache = new Map<string, CacheEntry>();
 
+// The release store (`/release/channel.json` + the installers) is not source, so
+// a repo that carries one must not open on a folder of binaries — that is what
+// the Releases tab is for. Whether the folder holds anything else is a property
+// of the repo, not of the request: decided once per session and reused, with a
+// short bound because a guest may still be fetching the listing from a peer.
+const storeFolderCache = new Map<string, Promise<boolean>>();
+
+async function holdsOnlyReleaseStore(session: Session): Promise<boolean> {
+	const content: any = session.content;
+	if (!content) return false;
+
+	const names: string[] = [];
+	const scan = (async () => {
+		for await (const item of content.readdir(RELEASE_DIR)) {
+			const name = typeof item === 'string' ? item : (item?.key ?? item?.name);
+			if (name) names.push(String(name).split('/').pop() as string);
+		}
+	})();
+
+	scan.catch(() => {});
+	await Promise.race([scan, new Promise((resolve) => setTimeout(resolve, 2500))]);
+	return isStoreOnlyFolder(RELEASE_DIR, names);
+}
+
+function releaseFolderHidden(session: Session): Promise<boolean> {
+	const hit = storeFolderCache.get(session.id);
+	if (hit) return hit;
+	const pending = holdsOnlyReleaseStore(session).catch(() => false);
+	storeFolderCache.set(session.id, pending);
+	return pending;
+}
+
 async function fetchEntries(app: App, id: string, dirPath: string): Promise<DriveEntry[]> {
 	const session = await getSession(app, id);
 	const seen = new Set<string>();
@@ -105,9 +138,15 @@ async function fetchEntries(app: App, id: string, dirPath: string): Promise<Driv
 	}
 
 	try {
+		const hideRelease = dirPath === '/' ? await releaseFolderHidden(session) : false;
 		for await (const item of session.drive!.readdir(dirPath)) {
 			const name = typeof item === 'string' ? item : (item as any).key || (item as any).name;
 			if (!name || name.startsWith('.') || seen.has(name)) continue;
+			const fullPath = dirPath === '/' ? '/' + name : `${dirPath}/${name}`;
+			// Release store files are never listed; the store folder itself is
+			// skipped when that is all it holds.
+			if (isReleaseStorePath(fullPath)) continue;
+			if (hideRelease && fullPath === RELEASE_DIR) continue;
 			seen.add(name);
 			pending.push(resolveEntry(name));
 		}
@@ -164,6 +203,7 @@ export function invalidateEntries(id: string): void {
 	for (const key of entriesCache.keys()) {
 		if (key.startsWith(`${id}:`)) entriesCache.delete(key);
 	}
+	storeFolderCache.delete(id);
 }
 
 export async function loadPeers(app: App, id: string): Promise<PeerInfo[]> {

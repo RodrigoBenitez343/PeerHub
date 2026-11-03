@@ -4,7 +4,9 @@
 # sidecar process to declare: desktop/main.js imports build/handler.js.
 appId: io.peerhub.app
 productName: PeerHub
-copyright: PeerHub contributors
+# Who ships the build. `author` in package.json is what lands in the executable's
+# Company field, so the two are the same person on purpose.
+copyright: © 2026 Rodrigo David Benitez
 
 directories:
   output: dist
@@ -36,6 +38,13 @@ npmRebuild: false
 win:
   target:
     - nsis
+  # Publisher shown by the installer and in Add/Remove Programs, and the identity
+  # of the signature: `npm run dist` makes sure a code-signing certificate with
+  # this subject is in the user's store (scripts/signing-cert.mjs) and
+  # electron-builder signs the exe, the uninstaller and the installer with it.
+  signtoolOptions:
+    publisherName: Rodrigo David Benitez
+    certificateSubjectName: Rodrigo David Benitez
   # A committed multi-size .ico: electron-builder's png→ico converter is
   # unreliable (heap OOM on this toolchain), and Windows needs the real thing
   # at 16/32/48 anyway. resources/icon.png stays for mac/linux.

@@ -15,6 +15,9 @@
 	let picking = $state(false);
 	let syncingId = $state<string | null>(null);
 	let syncNote = $state<{ ok: boolean; text: string } | null>(null);
+	// What the running sync is up to. `total` is null during the folder walk, since
+	// nobody knows how big it is until the walk ends.
+	let syncProgress = $state<{ id: string; done: number; total: number | null } | null>(null);
 
 	// Action results differ per form, so read them loosely.
 	const actionError = $derived((form as any)?.error as string | undefined);
@@ -45,13 +48,18 @@
 						await update();
 						return;
 					}
-					const job = await watchJob(jobId);
+					const job = await watchJob(jobId, {
+						onUpdate: (view) => {
+							syncProgress = { id, done: view.done, total: view.total };
+						}
+					});
 					syncNote = { ok: true, text: job.result?.message ?? 'Sync done' };
 					await invalidateAll();
 				} catch (err: any) {
 					syncNote = { ok: false, text: `Sync failed: ${err?.message ?? err}` };
 				} finally {
 					syncingId = null;
+					syncProgress = null;
 				}
 			};
 		};
@@ -279,15 +287,15 @@
 			</div>
 		</div>
 
-		<!-- Local sync -->
+		<!-- Local clones -->
 		<div>
 			<h3 class="text-text-muted mb-3 font-mono text-[10px] tracking-[2px] uppercase">
-				Local sync
+				Local clones
 			</h3>
 			<p class="text-text-muted mb-2 font-mono text-[9px] leading-relaxed">
-				Link a folder on this device with the repository. A linked folder is one-way by default: it
-				receives changes from the repo. Switch a folder to two-way to push local edits, additions
-				and deletions; the newer copy wins per file.
+				Folders on this device that hold a copy of this repository. A clone is one-way and mirrors
+				the repo: files the owner adds, changes or deletes land in it. Switch one to two-way to push
+				local edits, additions and deletions; the newer copy wins per file.
 			</p>
 
 			{#if actionMessage}
@@ -310,130 +318,125 @@
 				>
 					Connect to the host to sync
 				</p>
+			{:else if data.syncPairs.length === 0}
+				<p
+					class="border-border bg-bg-secondary text-text-muted rounded-md border px-3 py-4 text-center font-mono text-[10px] tracking-wider uppercase"
+				>
+					No clones yet — use Clone in the repository header
+				</p>
 			{:else}
-				{#if data.syncPairs.length === 0}
-					<p
-						class="border-border bg-bg-secondary text-text-muted rounded-md border px-3 py-4 text-center font-mono text-[10px] tracking-wider uppercase"
-					>
-						No synced folders
-					</p>
-				{:else}
-					<ul class="border-border bg-bg-secondary space-y-1 rounded-md border p-2">
-						{#each data.syncPairs as pair (pair.id)}
-							<li
-								class="hover:bg-bg-hover flex flex-wrap items-center gap-2 rounded px-3 py-2 transition"
-							>
-								<span class="text-accent-dim">
-									<svg
-										viewBox="0 0 16 16"
-										fill="none"
-										stroke="currentColor"
-										stroke-width="1.2"
-										class="h-4 w-4"
-									>
-										<path d="M2 5h5l1 1h6v7H2z" />
-										<path d="M8 8v4M6 10l2-2 2 2" />
-									</svg>
-								</span>
-								<div class="min-w-0 flex-1">
-									<p class="text-text-primary truncate font-mono text-xs">{pair.path}</p>
-									<p class="text-text-muted font-mono text-[9px]">
-										{pair.direction === 'two-way' ? 'two-way' : 'one-way'} · {lastSyncLabel(pair)}
-									</p>
-								</div>
-
-								<form method="POST" action="?/setSyncDirection" use:enhance>
-									<input type="hidden" name="syncId" value={pair.id} />
-									<input
-										type="hidden"
-										name="direction"
-										value={pair.direction === 'two-way' ? 'pull' : 'two-way'}
-									/>
-									<button
-										type="submit"
-										class="rounded border px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition {pair.direction ===
-										'two-way'
-											? 'border-accent-dim text-accent'
-											: 'border-border text-text-muted hover:text-text-secondary'}"
-										title={pair.direction === 'two-way'
-											? 'Stop pushing local changes'
-											: 'Allow local changes to be pushed'}
-									>
-										{pair.direction === 'two-way' ? '2-way' : '1-way'}
-									</button>
-								</form>
-
-								<form method="POST" action="?/syncNow" use:enhance={onSync(pair.id)}>
-									<input type="hidden" name="syncId" value={pair.id} />
-									<button
-										type="submit"
-										disabled={syncingId === pair.id || pair.running}
-										class="bg-accent text-bg-primary flex items-center gap-1.5 rounded px-3 py-1.5 font-mono text-[9px] tracking-wider uppercase transition hover:brightness-110 disabled:opacity-50"
-									>
-										{#if syncingId === pair.id || pair.running}
-											<Spinner size={11} />
-											Syncing…
-										{:else}
-											Sync now
-										{/if}
-									</button>
-								</form>
-
-								<form method="POST" action="?/toggleSyncAuto" use:enhance>
-									<input type="hidden" name="syncId" value={pair.id} />
-									<input type="hidden" name="auto" value={pair.auto ? '0' : '1'} />
-									<button
-										type="submit"
-										class="rounded border px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition {pair.auto
-											? 'border-accent-dim text-accent'
-											: 'border-border text-text-muted hover:text-text-secondary'}"
-									>
-										{pair.auto ? 'Auto on' : 'Auto off'}
-									</button>
-								</form>
-
-								<form method="POST" action="?/removeSync" use:enhance>
-									<input type="hidden" name="syncId" value={pair.id} />
-									<button
-										type="submit"
-										class="text-text-muted hover:text-danger px-1 transition"
-										title="Stop syncing"
-									>
-										×
-									</button>
-								</form>
-							</li>
-						{/each}
-					</ul>
-				{/if}
-
-				<div class="mt-2 flex gap-2">
-					<form method="POST" action="?/addSync" use:enhance class="flex flex-1 gap-2">
-						<input
-							name="path"
-							type="text"
-							placeholder="Local folder to sync, e.g. /home/me/Shared"
-							class="border-border bg-bg-tertiary text-text-primary focus:border-accent-dim flex-1 rounded border px-3 py-2 font-mono text-xs outline-none"
-						/>
-						<button
-							type="submit"
-							class="bg-accent text-bg-primary rounded px-4 py-2 font-mono text-[10px] tracking-wider uppercase hover:brightness-110"
+				<ul class="border-border bg-bg-secondary space-y-1 rounded-md border p-2">
+					{#each data.syncPairs as pair (pair.id)}
+						<li
+							class="hover:bg-bg-hover flex flex-wrap items-center gap-2 rounded px-3 py-2 transition"
 						>
-							Add
-						</button>
-					</form>
-					{#if data.canPickDirectory}
-						<form method="POST" action="?/pickSyncFolder" use:enhance={onPickFolder}>
-							<button
-								type="submit"
-								disabled={picking}
-								class="border-border text-text-secondary hover:border-accent-dim hover:text-accent rounded border px-4 py-2 font-mono text-[10px] tracking-wider uppercase transition disabled:opacity-50"
-							>
-								{picking ? 'Picking…' : 'Pick folder'}
-							</button>
-						</form>
-					{/if}
-				</div>
+							<span class="text-accent-dim">
+								<svg
+									viewBox="0 0 16 16"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="1.2"
+									class="h-4 w-4"
+								>
+									<path d="M2 5h5l1 1h6v7H2z" />
+									<path d="M8 8v4M6 10l2-2 2 2" />
+								</svg>
+							</span>
+							<div class="min-w-0 flex-1">
+								<p class="text-text-primary truncate font-mono text-xs">{pair.path}</p>
+								<p class="text-text-muted font-mono text-[9px]">
+									{pair.direction === 'two-way' ? 'two-way' : 'one-way'}{pair.prune
+										? ' · mirror'
+										: ''} · {lastSyncLabel(pair)}
+									{#if syncProgress?.id === pair.id}
+										· {syncProgress.total
+											? `${syncProgress.done}/${syncProgress.total} files`
+											: 'scanning…'}
+									{/if}
+								</p>
+							</div>
+
+							<form method="POST" action="?/setSyncDirection" use:enhance>
+								<input type="hidden" name="syncId" value={pair.id} />
+								<input
+									type="hidden"
+									name="direction"
+									value={pair.direction === 'two-way' ? 'pull' : 'two-way'}
+								/>
+								<button
+									type="submit"
+									class="rounded border px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition {pair.direction ===
+									'two-way'
+										? 'border-accent-dim text-accent'
+										: 'border-border text-text-muted hover:text-text-secondary'}"
+									title={pair.direction === 'two-way'
+										? 'Stop pushing local changes'
+										: 'Allow local changes to be pushed'}
+								>
+									{pair.direction === 'two-way' ? '2-way' : '1-way'}
+								</button>
+							</form>
+
+							<form method="POST" action="?/setSyncPrune" use:enhance>
+								<input type="hidden" name="syncId" value={pair.id} />
+								<input type="hidden" name="prune" value={pair.prune ? '0' : '1'} />
+								<button
+									type="submit"
+									class="rounded border px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition {pair.prune
+										? 'border-accent-dim text-accent'
+										: 'border-border text-text-muted hover:text-text-secondary'}"
+									title={pair.direction === 'two-way'
+										? 'One-way only: a two-way folder pushes its extra files instead of deleting them'
+										: pair.prune
+											? 'Keep local files the repo does not have'
+											: 'Delete local files the repo does not have, so the folder mirrors the repo'}
+								>
+									{pair.prune ? 'Mirror' : 'Keep extras'}
+								</button>
+							</form>
+
+							<form method="POST" action="?/syncNow" use:enhance={onSync(pair.id)}>
+								<input type="hidden" name="syncId" value={pair.id} />
+								<button
+									type="submit"
+									disabled={syncingId === pair.id || pair.running}
+									class="bg-accent text-bg-primary flex items-center gap-1.5 rounded px-3 py-1.5 font-mono text-[9px] tracking-wider uppercase transition hover:brightness-110 disabled:opacity-50"
+								>
+									{#if syncingId === pair.id || pair.running}
+										<Spinner size={11} />
+										Syncing…
+									{:else}
+										Sync now
+									{/if}
+								</button>
+							</form>
+
+							<form method="POST" action="?/toggleSyncAuto" use:enhance>
+								<input type="hidden" name="syncId" value={pair.id} />
+								<input type="hidden" name="auto" value={pair.auto ? '0' : '1'} />
+								<button
+									type="submit"
+									class="rounded border px-2.5 py-1.5 font-mono text-[9px] tracking-wider uppercase transition {pair.auto
+										? 'border-accent-dim text-accent'
+										: 'border-border text-text-muted hover:text-text-secondary'}"
+								>
+									{pair.auto ? 'Auto on' : 'Auto off'}
+								</button>
+							</form>
+
+							<form method="POST" action="?/removeSync" use:enhance>
+								<input type="hidden" name="syncId" value={pair.id} />
+								<button
+									type="submit"
+									class="text-text-muted hover:text-danger px-1 transition"
+									title="Stop syncing"
+								>
+									×
+								</button>
+							</form>
+						</li>
+					{/each}
+				</ul>
 			{/if}
 		</div>
 

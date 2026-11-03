@@ -11,11 +11,12 @@ import DriveSession from './session.js';
 import def from '../../../spec/hyperdb/index.js';
 import { ensureDefaultProfile } from './users.js';
 import { ensureCliToken } from './cli-token.js';
-import { registerRepo } from './repos.js';
+import { registerRepo, type RepoMeta } from './repos.js';
 import { JobRunner } from './jobs.js';
 import {
 	attachDirectory,
 	broadcastAnnouncements,
+	mirrorsToForget,
 	pruneAnnouncements,
 	refreshAnnouncements
 } from './directory.js';
@@ -23,6 +24,22 @@ import {
 interface PeerHubAppOptions {
 	dir?: string;
 	bootstrap?: unknown;
+}
+
+// A repo that cannot open must not hold the app hostage: the window is already
+// up by the time sessions are opened, and one stuck core would leave it loading
+// forever with nothing to show. Failing visibly beats hanging silently.
+const SESSION_OPEN_TIMEOUT_MS = 45_000;
+
+function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | null = null;
+	const timeout = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => reject(new Error(`${label} did not open within ${ms}ms`)), ms);
+		timer.unref?.();
+	});
+	return Promise.race([work, timeout]).finally(() => {
+		if (timer) clearTimeout(timer);
+	}) as Promise<T>;
 }
 
 export interface SessionInfo {
@@ -36,6 +53,8 @@ export interface ParsedInvite {
 	keyHex: string;
 	name: string | null;
 	metaKeyHex: string | null;
+	/** Key of the drive that holds repo content; absent in older invites. */
+	contentKeyHex: string | null;
 }
 
 export default class PeerHubApp extends ReadyResource {
@@ -180,11 +199,21 @@ export default class PeerHubApp extends ReadyResource {
 				name: meta.name,
 				icon: meta.icon,
 				key: meta.remoteKey ? b4a.from(meta.remoteKey, 'hex') : null,
-				metaKey: meta.metaKey ?? null
+				metaKey: meta.metaKey ?? null,
+				contentKey: meta.contentKey ?? null
 			});
-			await session.ready();
-			this.sessions.set(meta.id, session);
-			log(`session ${meta.id} ready`, `${Date.now() - s0}ms`);
+			try {
+				await withTimeout(session.ready(), SESSION_OPEN_TIMEOUT_MS, `session ${meta.id}`);
+				this.sessions.set(meta.id, session);
+				log(`session ${meta.id} ready`, `${Date.now() - s0}ms`);
+			} catch (err: any) {
+				// Left out of `sessions` on purpose: a half-open repo is worse than an
+				// absent one, and closing a resource that never opened would wait for
+				// the very open that just timed out.
+				console.error(
+					`[app] session ${meta.id} (${meta.name}) did not open: ${err?.message ?? err}`
+				);
+			}
 		}
 
 		log('open complete', `${this.sessions.size} sessions`);
@@ -270,9 +299,18 @@ export default class PeerHubApp extends ReadyResource {
 	}
 
 	async removeSession(id: string): Promise<void> {
-		const session = this.sessions.get(id);
-		if (!session) return;
+		if (!this.sessions.has(id)) return;
 
+		await this.dropSessionRows(id);
+		await this.closeSession(id);
+
+		// Peers treat a push as our complete list, so this retires the announcement
+		// instead of leaving the repo listed as public forever.
+		await broadcastAnnouncements(this).catch(() => {});
+	}
+
+	/** Every row that names a session, so nothing is left pointing at it. */
+	private async dropSessionRows(id: string): Promise<void> {
 		const regs = (await this.db!.find('@ghostdrive/registrations-by-session', {
 			gte: { sessionId: id },
 			lte: { sessionId: id }
@@ -300,18 +338,69 @@ export default class PeerHubApp extends ReadyResource {
 		await this.db!.delete('@ghostdrive/repos', { id });
 		await this.db!.delete('@ghostdrive/sessions', { id });
 		await this.db!.flush();
-		await session.close();
-		this.sessions.delete(id);
-
-		// Peers treat a push as our complete list, so this retires the announcement
-		// instead of leaving the repo listed as public forever.
-		await broadcastAnnouncements(this).catch(() => {});
 	}
 
-	// Peers report their complete repo list; a mirror whose source is no longer in
-	// it belongs to a repo the owner deleted. The local copy stays (those files
-	// are this peer's own), but it must stop looking like a live repo. A source
-	// that announces again clears the mark.
+	/** Out of `sessions` first, so no request can pick a repo that is going away. */
+	private async closeSession(id: string): Promise<void> {
+		const session = this.sessions.get(id);
+		if (!session) return;
+		this.sessions.delete(id);
+		await session
+			.close()
+			.catch((err: any) =>
+				console.warn(`[app] session ${id} did not close: ${err?.message ?? err}`)
+			);
+	}
+
+	/**
+	 * Forget guest mirrors of repos that are gone. A peer announces its complete
+	 * list, so a repo it stopped listing was deleted by its owner — and a mirror
+	 * of it is an empty repo nobody can open, which used to come back on every
+	 * restart because only an in-memory flag was set. The files are this peer's
+	 * own copy and stay on disk; the repo entry goes.
+	 */
+	async forgetRemovedMirrors({
+		peerKey = null,
+		gone = [],
+		live = []
+	}: {
+		peerKey?: string | null;
+		gone?: string[];
+		live?: string[];
+	} = {}): Promise<string[]> {
+		if (!this.db || (!peerKey && gone.length === 0)) return [];
+
+		const owners = new Map(
+			((await this.db.find('@ghostdrive/repos', { gte: {}, lte: {} }).toArray()) as RepoMeta[]).map(
+				(row) => [row.id, row.ownerKey]
+			)
+		);
+		const rows = (await this.db
+			.find('@ghostdrive/sessions', { gte: {}, lte: {} })
+			.toArray()) as any[];
+		// A guest row carries the drive key it mirrors; an owner row has none, so a
+		// repo somebody hosts here is never a candidate.
+		const mirrors = rows
+			.filter((row) => typeof row.remoteKey === 'string' && row.remoteKey)
+			.map((row) => ({
+				id: row.id as string,
+				driveKey: row.remoteKey as string,
+				ownerKey: owners.get(row.id) ?? null
+			}));
+
+		const forget = mirrorsToForget(mirrors, { peerKey, gone, live });
+		for (const id of forget) {
+			console.log(`[app] forgetting mirror ${id}`, 'the repo it mirrors was deleted');
+			await this.dropSessionRows(id);
+			await this.closeSession(id);
+		}
+		return forget;
+	}
+
+	// A peer that merely stopped answering has not deleted anything, so its mirrors
+	// are only marked here: the copy stays, it just stops looking live until the
+	// peer announces again. A repo the owner actually deleted is forgotten instead
+	// (forgetRemovedMirrors).
 	markRemovedSources(gone: string[], live: string[]): void {
 		if (gone.length === 0 && live.length === 0) return;
 
@@ -346,6 +435,7 @@ export default class PeerHubApp extends ReadyResource {
 		const payload = JSON.stringify({
 			key: b4a.toString(session.drive!.key, 'hex'),
 			meta: session.metaKeyHex,
+			content: session.contentKeyHex,
 			name: session.name
 		});
 		return (
@@ -365,12 +455,18 @@ export default class PeerHubApp extends ReadyResource {
 		const padded = encoded.replace(/-/g, '+').replace(/_/g, '/');
 		const obj = JSON.parse(b4a.toString(b4a.from(padded, 'base64')));
 		if (!obj.key || obj.key.length !== 64) throw new Error('Invalid invite payload');
-		const metaKeyHex = typeof obj.meta === 'string' && obj.meta.length === 64 ? obj.meta : null;
-		return { keyHex: obj.key, name: obj.name ?? null, metaKeyHex };
+		const hex64 = (value: unknown): string | null =>
+			typeof value === 'string' && /^[0-9a-f]{64}$/i.test(value) ? value : null;
+		return {
+			keyHex: obj.key,
+			name: obj.name ?? null,
+			metaKeyHex: hex64(obj.meta),
+			contentKeyHex: hex64(obj.content)
+		};
 	}
 
 	async acceptInvite(url: string): Promise<DriveSession> {
-		const { keyHex, name, metaKeyHex } = this.parseInvite(url);
+		const { keyHex, name, metaKeyHex, contentKeyHex } = this.parseInvite(url);
 		const key = b4a.from(keyHex, 'hex');
 
 		for (const session of this.sessions.values()) {
@@ -387,6 +483,7 @@ export default class PeerHubApp extends ReadyResource {
 			createdAt: Date.now(),
 			remoteKey: keyHex,
 			...(metaKeyHex ? { metaKey: metaKeyHex } : {}),
+			...(contentKeyHex ? { contentKey: contentKeyHex } : {}),
 			lastOpened: Date.now()
 		});
 		await this.db!.flush();
@@ -396,7 +493,8 @@ export default class PeerHubApp extends ReadyResource {
 			id,
 			name: sessionName,
 			key,
-			metaKey: metaKeyHex
+			metaKey: metaKeyHex,
+			contentKey: contentKeyHex
 		});
 		await session.ready();
 		this.sessions.set(id, session);
@@ -412,6 +510,7 @@ export default class PeerHubApp extends ReadyResource {
 	async openPublicRepo({
 		driveKey,
 		metaKey,
+		contentKey,
 		name,
 		description,
 		ownerKey,
@@ -419,6 +518,7 @@ export default class PeerHubApp extends ReadyResource {
 	}: {
 		driveKey: string;
 		metaKey: string | null;
+		contentKey?: string | null;
 		name: string;
 		description?: string | null;
 		ownerKey?: string;
@@ -438,11 +538,12 @@ export default class PeerHubApp extends ReadyResource {
 			createdAt: Date.now(),
 			remoteKey: driveKey,
 			...(metaKey ? { metaKey } : {}),
+			...(contentKey ? { contentKey } : {}),
 			lastOpened: Date.now()
 		});
 		await this.db!.flush();
 
-		const session = new DriveSession({ app: this, id, name, key, metaKey });
+		const session = new DriveSession({ app: this, id, name, key, metaKey, contentKey });
 		await session.ready();
 		this.sessions.set(id, session);
 		await registerRepo(this, session, {
